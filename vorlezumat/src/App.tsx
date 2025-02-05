@@ -20,10 +20,10 @@ function App() {
   const [transcriptionResult, setTranscriptionResult] = useState("");
   const [transcribing, setTranscribing] = useState(false);
 
-  // Existing: either "groq" or "openai"
+  // Either "groq" or "openai"
   const [selectedApi, setSelectedApi] = useState<"groq" | "openai">("groq");
 
-  // Existing: stored in localStorage
+  // Keys and models for audio transcription
   const [groqKey, setGroqKey] = useState<string>(
     localStorage.getItem("groqKey") || ""
   );
@@ -38,24 +38,32 @@ function App() {
   );
   const [maxFileSizeMB, setMaxFileSizeMB] = useState<number>(25);
 
+  // Logs + FFmpeg
   const [logMessages, setLogMessages] = useState<LogMessage[]>([]);
   const ffmpegRef = useRef(new FFmpeg());
   const messageRef = useRef<HTMLParagraphElement | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // -------------------
-  // NEW: Fields for Chat LLM
-  // -------------------
-  const [systemPrompt, setSystemPrompt] = useState<string>(""); // user-defined
-  const [chatCompletionResult, setChatCompletionResult] = useState<string>(""); // LLM output
+  // --------------------------------------------------
+  // NEW: Fields for Chat LLM (both Groq and OpenAI)
+  // --------------------------------------------------
+  const [systemPrompt, setSystemPrompt] = useState<string>("");
+  const [chatCompletionResult, setChatCompletionResult] = useState<string>("");
   const [isGeneratingChat, setIsGeneratingChat] = useState<boolean>(false);
 
-  // NEW: Drop-down for LLM Chat Model
+  // Dropdown model for OpenAI Chat
   const [openAiChatModel, setOpenAiChatModel] = useState<string>(
     localStorage.getItem("openAiChatModel") || "chatgpt-4o-latest"
   );
 
-  // Load FFmpeg
+  // Dropdown model for Groq Chat
+  const [groqChatModel, setGroqChatModel] = useState<string>(
+    localStorage.getItem("groqChatModel") || "llama-3.3-70b-versatile"
+  );
+
+  // ---------------------------
+  //  Load FFmpeg on mount
+  // ---------------------------
   useEffect(() => {
     const loadFFmpeg = async () => {
       appendLog("Loading ffmpeg-core automatically...", "info");
@@ -78,7 +86,7 @@ function App() {
     loadFFmpeg();
   }, []);
 
-  // Auto-scroll log
+  // Auto-scroll the log
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
@@ -91,7 +99,7 @@ function App() {
     setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
   };
 
-  // Handlers
+  // Handlers for API key, model, etc.
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const key = e.target.value;
     setGroqKey(key);
@@ -141,17 +149,25 @@ function App() {
     appendLog(`Switched API provider to ${provider}`, "info");
   };
 
-  // NEW: Handler for LLM chat model dropdown
+  // Dropdown for LLM Chat - OpenAI
   const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
     setOpenAiChatModel(chosenModel);
     localStorage.setItem("openAiChatModel", chosenModel);
-    appendLog(`Set Chat LLM Model to "${chosenModel}".`, "info");
+    appendLog(`Set OpenAI Chat Model to "${chosenModel}".`, "info");
   };
 
-  // -------------
+  // Dropdown for LLM Chat - Groq
+  const handleGroqChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const chosenModel = e.target.value;
+    setGroqChatModel(chosenModel);
+    localStorage.setItem("groqChatModel", chosenModel);
+    appendLog(`Set Groq Chat Model to "${chosenModel}".`, "info");
+  };
+
+  // -------------------------
   // Convert + Split + Transcribe
-  // -------------
+  // -------------------------
   const convertToMp3 = async () => {
     if (!inputFile) {
       alert("No file selected!");
@@ -208,7 +224,7 @@ function App() {
 
     appendLog("Starting transcription of segments...", "info");
 
-    // Process the transcription API calls in batches of up to 10 concurrently.
+    // Process in batches of up to 10 concurrently
     const transcripts: string[] = [];
     const concurrencyLimit = 10;
     for (let i = 0; i < finalSegments.length; i += concurrencyLimit) {
@@ -220,7 +236,6 @@ function App() {
         "info"
       );
       try {
-        // Fire off the batch concurrently:
         const batchResults = await Promise.all(
           batch.map((seg) => transcribeSegment(seg.filename))
         );
@@ -231,7 +246,7 @@ function App() {
           "error"
         );
       }
-      // If there are more segments to process, wait 60 seconds before starting the next batch.
+      // If there are more segments, wait 60s before the next batch
       if (i + concurrencyLimit < finalSegments.length) {
         appendLog("Waiting 60 seconds before next batch...", "info");
         await new Promise((resolve) => setTimeout(resolve, 60000));
@@ -289,11 +304,8 @@ function App() {
     const rightFilename = `${filename}_right_${halfTime.toFixed(2)}.mp3`;
 
     appendLog(
-      `Splitting "${filename}" at ${halfTime.toFixed(
-        2
-      )} s. Left: 0–${leftEnd.toFixed(
-        2
-      )}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(2)}`,
+      `Splitting "${filename}" at ${halfTime.toFixed(2)} s. ` +
+        `Left: 0–${leftEnd.toFixed(2)}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(2)}`,
       "info"
     );
 
@@ -336,13 +348,14 @@ function App() {
       appendLog("ERROR: No OpenAI API key specified.", "error");
       return "";
     }
+
     const ffmpeg = ffmpegRef.current;
     const segData = (await ffmpeg.readFile(filename)) as Uint8Array;
     const blob = new Blob([segData.buffer], { type: "audio/mp3" });
     const audioFile = new File([blob], filename, { type: "audio/mp3" });
 
     if (selectedApi === "groq") {
-      // Groq transcription
+      // GROQ-based transcription
       try {
         const groqClient = new Groq({
           apiKey: groqKey,
@@ -363,7 +376,7 @@ function App() {
         throw err;
       }
     } else {
-      // OpenAI transcription
+      // OpenAI-based transcription
       try {
         const openaiClient = new OpenAI({
           apiKey: openaiKey,
@@ -473,7 +486,9 @@ function App() {
     return stitched.trim();
   };
 
+  // --------------------------------
   // Copy Transcription
+  // --------------------------------
   const handleCopyTranscription = () => {
     if (!transcriptionResult) return;
     navigator.clipboard.writeText(transcriptionResult).then(
@@ -487,61 +502,108 @@ function App() {
   };
 
   // --------------------------------------
-  // NEW: Send the System Prompt + Transcript to LLM
+  // Unified function: Send to LLM (Groq or OpenAI)
   // --------------------------------------
   const handleSendToLLM = async () => {
-    // We’ll only demo OpenAI's chat here.
-    if (!openaiKey) {
-      appendLog("ERROR: OpenAI key not set. Please provide a valid key.", "error");
-      return;
-    }
     if (!transcriptionResult) {
       appendLog("No transcription found to send to the model.", "error");
       return;
     }
-    setIsGeneratingChat(true);
-    setChatCompletionResult("");
-    appendLog("Sending System Prompt + Transcript to OpenAI Chat...", "info");
 
-    try {
-      // Use your normal OpenAI constructor:
-      const openaiClient = new OpenAI({
-        apiKey: openaiKey,
-        dangerouslyAllowBrowser: true,
-      });
+    if (selectedApi === "openai") {
+      // OpenAI chat
+      if (!openaiKey) {
+        appendLog("ERROR: OpenAI key not set. Please provide a valid key.", "error");
+        return;
+      }
+      setIsGeneratingChat(true);
+      setChatCompletionResult("");
+      appendLog("Sending System Prompt + Transcript to OpenAI Chat...", "info");
 
-      // Use the newly selected chat model from the dropdown:
-      const response = await openaiClient.chat.completions.create({
-        model: openAiChatModel, // <--- Using the new dropdown model here
-        messages: [
-          {
-            role: "system",
-            content: systemPrompt || "You are a helpful assistant.",
-          },
-          {
-            role: "user",
-            content: transcriptionResult,
-          },
-        ],
-        temperature: 1,
-        max_tokens: 1500,
-      });
+      try {
+        const openaiClient = new OpenAI({
+          apiKey: openaiKey,
+          dangerouslyAllowBrowser: true,
+        });
+        const response = await openaiClient.chat.completions.create({
+          model: openAiChatModel,
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt || "You are a helpful assistant.",
+            },
+            {
+              role: "user",
+              content: transcriptionResult,
+            },
+          ],
+          temperature: 1,
+          max_tokens: 1500,
+        });
+        const output = response.choices?.[0]?.message?.content || "";
+        setChatCompletionResult(output);
+        appendLog("Received response from OpenAI Chat.", "info");
+      } catch (err: any) {
+        appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
+      } finally {
+        setIsGeneratingChat(false);
+      }
+    } else {
+      // Groq chat
+      if (!groqKey) {
+        appendLog("ERROR: Groq key not set. Please provide a valid key.", "error");
+        return;
+      }
+      setIsGeneratingChat(true);
+      setChatCompletionResult("");
+      appendLog("Sending System Prompt + Transcript to Groq Chat...", "info");
 
-      // You can get the first choice:
-      const output = response.choices?.[0]?.message?.content || "";
-      setChatCompletionResult(output);
-      appendLog("Received response from OpenAI Chat.", "info");
-    } catch (err: any) {
-      appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
-    } finally {
-      setIsGeneratingChat(false);
+      try {
+        const groqClient = new Groq({
+          apiKey: groqKey,
+          dangerouslyAllowBrowser: true,
+        });
+
+        // We'll request the entire response in one chunk (stream = false)
+        const response = await groqClient.chat.completions.create({
+          model: groqChatModel,
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt || "You are a helpful assistant.",
+            },
+            {
+              role: "user",
+              content: transcriptionResult,
+            },
+          ],
+          temperature: 1,
+          max_completion_tokens: 15140,
+          top_p: 1,
+          stop: null,
+          stream: false,
+        });
+
+        // If not streaming, we get the entire completion in `response.choices`
+        const output = response.choices?.[0]?.message?.content || "";
+        setChatCompletionResult(output);
+        appendLog("Received response from Groq Chat.", "info");
+      } catch (err: any) {
+        appendLog("Error calling Groq Chat: " + (err.message || String(err)), "error");
+      } finally {
+        setIsGeneratingChat(false);
+      }
     }
   };
 
+  // --------------------------------
+  // RENDER
+  // --------------------------------
   return (
     <div className="app-container">
       <h2 className="header-title">Speech-to-Text: Recursive Split &amp; Stitch</h2>
 
+      {/* Control Panel for Transcription Settings */}
       <div className="control-panel">
         <div className="control-row">
           <label>API Provider:</label>
@@ -568,13 +630,13 @@ function App() {
               />
             </div>
             <div className="control-row">
-              <label>Groq Model:</label>
+              <label>Groq Model (Audio):</label>
               <input
                 className="control-input"
                 type="text"
                 value={groqModel}
                 onChange={handleGroqModelChange}
-                placeholder="whisper-large-v3"
+                placeholder="e.g. whisper-large-v3"
               />
             </div>
           </>
@@ -591,13 +653,13 @@ function App() {
               />
             </div>
             <div className="control-row">
-              <label>OpenAI Model:</label>
+              <label>OpenAI Model (Audio):</label>
               <input
                 className="control-input"
                 type="text"
                 value={openaiModel}
                 onChange={handleOpenaiModelChange}
-                placeholder="whisper-1"
+                placeholder="e.g. whisper-1"
               />
             </div>
           </>
@@ -631,6 +693,7 @@ function App() {
         </button>
       </div>
 
+      {/* Show Transcription Result if available */}
       {transcriptionResult && (
         <div className="transcript-section">
           <div className="transcript-header">
@@ -647,27 +710,55 @@ function App() {
         </div>
       )}
 
-      {selectedApi === "openai" && transcriptionResult && (
+      {/* 
+        Show LLM Post-Processing Panel 
+        Only if we have a transcription
+      */}
+      {transcriptionResult && (
         <div className="control-panel" style={{ marginTop: "1rem" }}>
           <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>
             LLM Post-Processing
           </h3>
 
-          {/* NEW: Dropdown to select the chat LLM model */}
-          <div className="control-row" style={{ alignItems: "flex-start" }}>
-            <label>LLM Model:</label>
-            <select
-              className="control-input"
-              value={openAiChatModel}
-              onChange={handleOpenAiChatModelChange}
-            >
-              <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
-              <option value="gpt-4o-mini">gpt-4o-mini</option>
-              <option value="o3-mini">o3-mini</option>
-              <option value="o1">o1</option>
-            </select>
-          </div>
+          {selectedApi === "openai" ? (
+            <>
+              {/* OpenAI Chat model dropdown */}
+              <div className="control-row" style={{ alignItems: "flex-start" }}>
+                <label>LLM Model (Chat):</label>
+                <select
+                  className="control-input"
+                  value={openAiChatModel}
+                  onChange={handleOpenAiChatModelChange}
+                >
+                  <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="o3-mini">o3-mini</option>
+                  <option value="o1">o1</option>
+                </select>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Groq Chat model dropdown */}
+              <div className="control-row" style={{ alignItems: "flex-start" }}>
+                <label>LLM Model (Chat):</label>
+                <select
+                  className="control-input"
+                  value={groqChatModel}
+                  onChange={handleGroqChatModelChange}
+                >
+                  <option value="llama-3.3-70b-versatile">
+                    llama-3.3-70b-versatile
+                  </option>
+                  <option value="deepseek-r1-distill-llama-70b">
+                    deepseek-r1-distill-llama-70b
+                  </option>
+                </select>
+              </div>
+            </>
+          )}
 
+          {/* System Prompt */}
           <div className="control-row" style={{ alignItems: "flex-start" }}>
             <label style={{ marginTop: "0.5rem" }}>System Prompt:</label>
             <textarea
@@ -684,11 +775,12 @@ function App() {
             onClick={handleSendToLLM}
             disabled={isGeneratingChat}
           >
-            {isGeneratingChat ? "Loading..." : "Send to OpenAI Chat"}
+            {isGeneratingChat ? "Loading..." : `Send to ${selectedApi} Chat`}
           </button>
         </div>
       )}
 
+      {/* LLM Output */}
       {chatCompletionResult && (
         <div className="transcript-section" style={{ marginTop: "1rem" }}>
           <div className="transcript-header">
@@ -698,6 +790,7 @@ function App() {
         </div>
       )}
 
+      {/* Unified Log */}
       <div className="log-section">
         <h3>Unified Log Console</h3>
         <div className="log-container" ref={logContainerRef}>
