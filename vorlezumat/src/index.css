@@ -1,70 +1,178 @@
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+/* index.css */
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* Reset and Base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: #1e1e1e;
+  color: #e0e0e0;
+}
+
+/* Container */
+.app-container {
+  max-width: 720px;
+  margin: 3rem auto;
+  padding: 0 1rem;
+  text-align: center;
+}
+
+/* Header */
+.header-title {
+  margin-bottom: 2rem;
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* Control Panel */
+.control-panel {
   display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-  justify-content: center;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
+  flex-direction: column;
+  gap: 1rem;
+  background-color: #2a2a2a;
   border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  padding: 1rem;
+  margin-bottom: 2rem;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.control-row label {
+  flex: 0 0 150px;
+  text-align: left;
+  margin-right: 1rem;
+  color: #ccc;
+  font-weight: 500;
+}
+
+.control-input,
+.file-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #333;
+  color: #fff;
+}
+
+/* Button Styles */
+.btn-action,
+.btn-copy {
+  background-color: #666;
+  border: none;
+  border-radius: 4px;
+  padding: 0.6em 1.2em;
+  font-size: 1rem;
+  color: #fff;
+  cursor: pointer;
+}
+
+.btn-action:hover,
+.btn-copy:hover {
+  background-color: #777;
+}
+
+.btn-action:disabled {
+  background-color: #444;
+  cursor: not-allowed;
+}
+
+/* Transcript Section */
+.transcript-section {
+  text-align: left;
+  margin-bottom: 2rem;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.transcript-header h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.transcript-output {
+  background-color: #292929;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 1rem;
+  height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: #cfcfcf;
+}
+
+/* Log Section */
+.log-section {
+  text-align: left;
+}
+
+.log-section h3 {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
+  color: #fff;
+}
+
+.log-container {
+  background-color: #292929;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 0.5rem;
+  height: 100px;
+  overflow-y: auto;
+  font-family: monospace;
+}
+
+.log-line {
+  margin: 0.2rem 0;
+  font-size: 0.9rem;
+}
+
+.log-line-old {
+  color: #bbb;
+}
+
+.log-line-current {
+  color: #fff;
+}
+
+.log-line-error {
+  color: #f44336;
+  font-weight: bold;
+}
+
+.blur {
+  filter: blur(5px);
+}
+
+.blur:focus {
+  filter: blur(0px);
+}
+
+.blur:placeholder-shown {
+  filter: blur(0px);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .control-row label {
+    flex: 0 0 120px;
   }
 }

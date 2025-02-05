@@ -2,195 +2,721 @@ import { useState, useRef, useEffect } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
 import Groq from "groq-sdk";
+import OpenAI from "openai";
+
+interface SegmentInfo {
+  filename: string;
+  size: number;
+}
+
+interface LogMessage {
+  text: string;
+  type: "info" | "error";
+}
 
 function App() {
-  // State für FFmpeg-Status, ausgewählte Datei (Audio/Video), Transkription und API-Key
   const [loaded, setLoaded] = useState(false);
   const [inputFile, setInputFile] = useState<File | null>(null);
   const [transcriptionResult, setTranscriptionResult] = useState("");
-  const [apiKey, setApiKey] = useState<string>(
-    localStorage.getItem("groqApiKey") || ""
-  );
   const [transcribing, setTranscribing] = useState(false);
 
-  const ffmpegRef = useRef(new FFmpeg());
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const messageRef = useRef<HTMLParagraphElement | null>(null);
+  // Existing: either "groq" or "openai"
+  const [selectedApi, setSelectedApi] = useState<"groq" | "openai">("groq");
 
-  // Beim Starten der App: Falls ein API-Key in localStorage gespeichert ist, wird dieser gesetzt.
+  // Existing: stored in localStorage
+  const [groqKey, setGroqKey] = useState<string>(
+    localStorage.getItem("groqKey") || ""
+  );
+  const [openaiKey, setOpenaiKey] = useState<string>(
+    localStorage.getItem("openaiKey") || ""
+  );
+  const [groqModel, setGroqModel] = useState<string>(
+    localStorage.getItem("groqModel") || "whisper-large-v3"
+  );
+  const [openaiModel, setOpenaiModel] = useState<string>(
+    localStorage.getItem("openaiModel") || "whisper-1"
+  );
+  const [maxFileSizeMB, setMaxFileSizeMB] = useState<number>(25);
+
+  const [logMessages, setLogMessages] = useState<LogMessage[]>([]);
+  const ffmpegRef = useRef(new FFmpeg());
+  const messageRef = useRef<HTMLParagraphElement | null>(null);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // -------------------
+  // NEW: Fields for Chat LLM
+  // -------------------
+  const [systemPrompt, setSystemPrompt] = useState<string>(""); // user-defined
+  const [chatCompletionResult, setChatCompletionResult] = useState<string>(""); // LLM output
+  const [isGeneratingChat, setIsGeneratingChat] = useState<boolean>(false);
+
+  // NEW: Drop-down for LLM Chat Model
+  const [openAiChatModel, setOpenAiChatModel] = useState<string>(
+    localStorage.getItem("openAiChatModel") || "chatgpt-4o-latest"
+  );
+
+  // Load FFmpeg
   useEffect(() => {
-    const storedKey = localStorage.getItem("groqApiKey");
-    if (storedKey) {
-      setApiKey(storedKey);
-    }
+    const loadFFmpeg = async () => {
+      appendLog("Loading ffmpeg-core automatically...", "info");
+      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
+      const ffmpeg = ffmpegRef.current;
+      ffmpeg.on("log", ({ message }) => {
+        if (messageRef.current) messageRef.current.innerHTML = message;
+        appendLog(`FFmpeg: ${message}`, "info");
+      });
+      try {
+        await ffmpeg.load({
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        });
+        setLoaded(true);
+        appendLog("ffmpeg-core loaded successfully.", "info");
+      } catch (err) {
+        appendLog("Error loading ffmpeg-core: " + err, "error");
+      }
+    };
+    loadFFmpeg();
   }, []);
 
-  // API-Key im localStorage speichern, wenn er geändert wird.
-  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Auto-scroll log
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [logMessages]);
+
+  // Helper: Append log
+  const appendLog = (msg: string, type: "info" | "error" = "info") => {
+    const timeStamp = new Date().toLocaleTimeString();
+    setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
+  };
+
+  // Handlers
+  const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const key = e.target.value;
-    setApiKey(key);
-    localStorage.setItem("groqApiKey", key);
+    setGroqKey(key);
+    localStorage.setItem("groqKey", key);
+    appendLog("Updated Groq API key.", "info");
   };
 
-  const load = async () => {
-    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
-    const ffmpeg = ffmpegRef.current;
-    ffmpeg.on("log", ({ message }) => {
-      if (messageRef.current) messageRef.current.innerHTML = message;
-    });
-
-    // Nur wasmURL wird benötigt – coreURL und workerURL entfallen.
-    await ffmpeg.load({
-      wasmURL: await toBlobURL(
-        `${baseURL}/ffmpeg-core.wasm`,
-        "application/wasm"
-      ),
-    });
-    setLoaded(true);
+  const handleOpenaiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const key = e.target.value;
+    setOpenaiKey(key);
+    localStorage.setItem("openaiKey", key);
+    appendLog("Updated OpenAI API key.", "info");
   };
 
-  const convertToMp3 = async () => {
-    if (!inputFile) {
-      alert("Please select an audio or video file first!");
-      return;
-    }
-    const ffmpeg = ffmpegRef.current;
-    const inputFileName = inputFile.name;
-    const outputFileName = "output.mp3";
-
-    // Schreibe die ausgewählte Datei in das virtuelle Dateisystem von ffmpeg.
-    await ffmpeg.writeFile(inputFileName, await fetchFile(inputFile));
-
-    // Wähle den ffmpeg-Befehl basierend auf dem Dateityp:
-    // - Bei Video-Inputs: extrahiere den Audiotrack (Optionen: -q:a 0 und -map a)
-    // - Bei Audio-Inputs: führe eine einfache Konvertierung durch.
-    let ffmpegCommand: string[] = [];
-    if (inputFile.type.startsWith("video/")) {
-      ffmpegCommand = [
-        "-i",
-        inputFileName,
-        "-q:a",
-        "0",
-        "-map",
-        "a",
-        outputFileName,
-      ];
-    } else if (inputFile.type.startsWith("audio/")) {
-      // Hier wird die Eingabedatei in MP3 konvertiert.
-      ffmpegCommand = ["-i", inputFileName, outputFileName];
-    } else {
-      alert("Unsupported file type!");
-      return;
-    }
-
-    // Führe den ffmpeg-Befehl aus.
-    await ffmpeg.exec(ffmpegCommand);
-
-    // Lese die Ausgabedatei (MP3) aus dem virtuellen Dateisystem.
-    const fileData = await ffmpeg.readFile(outputFileName);
-    const data = new Uint8Array(fileData as ArrayBuffer);
-
-    // Erstelle einen Blob für den MP3-Inhalt und weise ihn dem Audio-Element zu.
-    const audioBlob = new Blob([data.buffer], { type: "audio/mp3" });
-    if (audioRef.current) {
-      audioRef.current.src = URL.createObjectURL(audioBlob);
-    }
-
-    // Starte die Transkription des Audios.
-    transcribeAudio(audioBlob);
+  const handleGroqModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const model = e.target.value;
+    setGroqModel(model);
+    localStorage.setItem("groqModel", model);
+    appendLog(`Updated Groq model to "${model}".`, "info");
   };
 
-  const transcribeAudio = async (audioBlob: Blob) => {
-    if (!apiKey) {
-      alert("Please provide your Groq API key!");
-      return;
-    }
-    setTranscribing(true);
-    setTranscriptionResult(""); // Vorherige Ergebnisse zurücksetzen
+  const handleOpenaiModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const model = e.target.value;
+    setOpenaiModel(model);
+    localStorage.setItem("openaiModel", model);
+    appendLog(`Updated OpenAI model to "${model}".`, "info");
+  };
 
-    try {
-      // Erstelle eine File-Instanz aus dem Blob, um sie an den Groq API-Client zu übergeben.
-      const audioFile = new File([audioBlob], "output.mp3", {
-        type: "audio/mp3",
-      });
-      // Initialisiere Groq mit dem API-Key (Option dangerouslyAllowBrowser aktiviert, um Browser-Umgebungen zu erlauben)
-      const groq = new Groq({ apiKey, dangerouslyAllowBrowser: true });
-      // Sende die Audiodatei an den Whisper-Service zur Transkription.
-      const transcription = await groq.audio.transcriptions.create({
-        file: audioFile,
-        model: "whisper-large-v3",
-        response_format: "verbose_json",
-      });
-      // Setze das Transkriptionsergebnis (abhängig von der API-Antwort).
-      setTranscriptionResult(
-        (transcription as any).text ||
-          "No transcription text found in the response."
-      );
-    } catch (error: any) {
-      console.error("Transcription error:", error);
-      setTranscriptionResult("An error occurred during transcription.");
-    } finally {
-      setTranscribing(false);
+  const handleMaxFileSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newSize = parseFloat(e.target.value);
+    if (!isNaN(newSize) && newSize > 0) {
+      setMaxFileSizeMB(newSize);
+      appendLog(`Max file size updated to ${newSize} MB`, "info");
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
       setInputFile(e.target.files[0]);
+      appendLog(`Selected file: ${e.target.files[0].name}`, "info");
     }
   };
 
-  return loaded ? (
-    <div style={{ maxWidth: 600, margin: "2rem auto", textAlign: "center" }}>
-      <h2>Convert to MP3 & Transcribe via Groq Whisper</h2>
+  const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const provider = e.target.value as "groq" | "openai";
+    setSelectedApi(provider);
+    appendLog(`Switched API provider to ${provider}`, "info");
+  };
 
-      {/* Eingabefeld für den Groq API-Key */}
-      <div style={{ marginBottom: "1rem" }}>
-        <label>
-          Groq API Key:{" "}
+  // NEW: Handler for LLM chat model dropdown
+  const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const chosenModel = e.target.value;
+    setOpenAiChatModel(chosenModel);
+    localStorage.setItem("openAiChatModel", chosenModel);
+    appendLog(`Set Chat LLM Model to "${chosenModel}".`, "info");
+  };
+
+  // -------------
+  // Convert + Split + Transcribe
+  // -------------
+  const convertToMp3 = async () => {
+    if (!inputFile) {
+      alert("No file selected!");
+      return;
+    }
+    if (!loaded) {
+      alert("FFmpeg not yet loaded. Please wait...");
+      return;
+    }
+    setTranscribing(true);
+    setTranscriptionResult("");
+    appendLog("Starting conversion to MP3...", "info");
+
+    const ffmpeg = ffmpegRef.current;
+    const inputFileName = inputFile.name;
+    const outputFileName = "output.mp3";
+
+    appendLog(`Writing ${inputFileName} to virtual FS...`, "info");
+    await ffmpeg.writeFile(inputFileName, await fetchFile(inputFile));
+
+    let ffmpegCmd: string[];
+    if (inputFile.type.startsWith("video/")) {
+      ffmpegCmd = ["-i", inputFileName, "-q:a", "0", "-map", "a", outputFileName];
+      appendLog("Detected video file – extracting audio track.", "info");
+    } else {
+      ffmpegCmd = ["-i", inputFileName, outputFileName];
+      appendLog("Detected audio file – converting to MP3.", "info");
+    }
+
+    try {
+      await ffmpeg.exec(ffmpegCmd);
+      appendLog("Conversion complete. Reading output.mp3...", "info");
+    } catch (err) {
+      appendLog("Error during conversion: " + err, "error");
+      setTranscribing(false);
+      return;
+    }
+
+    const mp3Data = (await ffmpeg.readFile(outputFileName)) as Uint8Array;
+    const mp3Size = mp3Data.byteLength;
+    appendLog(`output.mp3 size: ${mp3Size} bytes.`, "info");
+
+    const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
+    let finalSegments: SegmentInfo[] = [];
+
+    if (mp3Size > MAX_BYTES) {
+      appendLog("Resulting file is greater than maximum allowed size.", "info");
+      appendLog("Splitting file by size...", "info");
+      finalSegments = await recursiveSplitBySize(outputFileName);
+    } else {
+      appendLog("No splitting needed.", "info");
+      finalSegments.push({ filename: outputFileName, size: mp3Size });
+    }
+
+    appendLog("Starting transcription of segments...", "info");
+
+    // Process the transcription API calls in batches of up to 10 concurrently.
+    const transcripts: string[] = [];
+    const concurrencyLimit = 10;
+    for (let i = 0; i < finalSegments.length; i += concurrencyLimit) {
+      const batch = finalSegments.slice(i, i + concurrencyLimit);
+      appendLog(
+        `Processing batch ${Math.floor(i / concurrencyLimit) + 1} of ${Math.ceil(
+          finalSegments.length / concurrencyLimit
+        )}...`,
+        "info"
+      );
+      try {
+        // Fire off the batch concurrently:
+        const batchResults = await Promise.all(
+          batch.map((seg) => transcribeSegment(seg.filename))
+        );
+        transcripts.push(...batchResults);
+      } catch (err: any) {
+        appendLog(
+          `Error during batch transcription: ${err.message || err}`,
+          "error"
+        );
+      }
+      // If there are more segments to process, wait 60 seconds before starting the next batch.
+      if (i + concurrencyLimit < finalSegments.length) {
+        appendLog("Waiting 60 seconds before next batch...", "info");
+        await new Promise((resolve) => setTimeout(resolve, 60000));
+      }
+    }
+
+    const masterTranscript = improvedStitchTranscriptions(transcripts, appendLog);
+    setTranscriptionResult(masterTranscript);
+    appendLog("All segments transcribed and stitched.", "info");
+
+    setTranscribing(false);
+  };
+
+  // Recursive Split
+  const recursiveSplitBySize = async (filename: string): Promise<SegmentInfo[]> => {
+    const ffmpeg = ffmpegRef.current;
+    const fileData = (await ffmpeg.readFile(filename)) as Uint8Array;
+    const size = fileData.byteLength;
+    const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
+    if (size <= MAX_BYTES) {
+      appendLog(`File "${filename}" is below limit: ${size} bytes.`, "info");
+      return [{ filename, size }];
+    }
+    appendLog(
+      `File "${filename}" is too big (${size} bytes). Splitting in half with overlap...`,
+      "info"
+    );
+
+    let tempOut = "";
+    const tempLogHandler = ({ message }: { message: string }) => {
+      tempOut += message + "\n";
+    };
+    ffmpeg.on("log", tempLogHandler);
+    await ffmpeg.exec(["-i", filename, "-f", "null", "-"]);
+    ffmpeg.off("log", tempLogHandler);
+
+    const durationMatch = tempOut.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+    if (!durationMatch) {
+      appendLog(`ERROR: Could not determine duration for ${filename}.`, "error");
+      return [{ filename, size }];
+    }
+    const hh = parseInt(durationMatch[1], 10);
+    const mm = parseInt(durationMatch[2], 10);
+    const ss = parseFloat(durationMatch[3]);
+    const totalDuration = hh * 3600 + mm * 60 + ss;
+    appendLog(
+      `Duration for "${filename}": ${totalDuration.toFixed(2)} s.`,
+      "info"
+    );
+
+    const halfTime = totalDuration / 2;
+    const leftEnd = Math.min(halfTime + 3, totalDuration);
+    const rightStart = Math.max(halfTime - 3, 0);
+    const leftFilename = `${filename}_left_${halfTime.toFixed(2)}.mp3`;
+    const rightFilename = `${filename}_right_${halfTime.toFixed(2)}.mp3`;
+
+    appendLog(
+      `Splitting "${filename}" at ${halfTime.toFixed(
+        2
+      )} s. Left: 0–${leftEnd.toFixed(
+        2
+      )}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(2)}`,
+      "info"
+    );
+
+    await ffmpeg.exec([
+      "-i",
+      filename,
+      "-ss",
+      "0",
+      "-to",
+      leftEnd.toString(),
+      "-c",
+      "copy",
+      leftFilename,
+    ]);
+    await ffmpeg.exec([
+      "-i",
+      filename,
+      "-ss",
+      rightStart.toString(),
+      "-to",
+      totalDuration.toString(),
+      "-c",
+      "copy",
+      rightFilename,
+    ]);
+
+    const leftSegments = await recursiveSplitBySize(leftFilename);
+    const rightSegments = await recursiveSplitBySize(rightFilename);
+    return [...leftSegments, ...rightSegments];
+  };
+
+  // Transcribe Segment
+  const transcribeSegment = async (filename: string): Promise<string> => {
+    appendLog(`Transcribing segment "${filename}"...`, "info");
+    if (selectedApi === "groq" && !groqKey) {
+      appendLog("ERROR: No Groq API key specified.", "error");
+      return "";
+    }
+    if (selectedApi === "openai" && !openaiKey) {
+      appendLog("ERROR: No OpenAI API key specified.", "error");
+      return "";
+    }
+    const ffmpeg = ffmpegRef.current;
+    const segData = (await ffmpeg.readFile(filename)) as Uint8Array;
+    const blob = new Blob([segData.buffer], { type: "audio/mp3" });
+    const audioFile = new File([blob], filename, { type: "audio/mp3" });
+
+    if (selectedApi === "groq") {
+      // Groq transcription
+      try {
+        const groqClient = new Groq({
+          apiKey: groqKey,
+          dangerouslyAllowBrowser: true,
+        });
+        const resp = await groqClient.audio.transcriptions.create({
+          file: audioFile,
+          model: groqModel,
+          response_format: "verbose_json",
+        });
+        appendLog(`Transcription received for "${filename}" (Groq).`, "info");
+        return resp?.text || "";
+      } catch (err: any) {
+        appendLog(
+          `Error transcribing "${filename}" with Groq: ${err.message || err}`,
+          "error"
+        );
+        throw err;
+      }
+    } else {
+      // OpenAI transcription
+      try {
+        const openaiClient = new OpenAI({
+          apiKey: openaiKey,
+          dangerouslyAllowBrowser: true,
+        });
+        const resp = await openaiClient.audio.transcriptions.create({
+          file: audioFile,
+          model: openaiModel,
+          response_format: "verbose_json",
+        });
+        appendLog(`Transcription received for "${filename}" (OpenAI).`, "info");
+        return resp?.text || "";
+      } catch (err: any) {
+        appendLog(
+          `Error transcribing "${filename}" with OpenAI: ${err.message || err}`,
+          "error"
+        );
+        throw err;
+      }
+    }
+  };
+
+  // Stitch Transcriptions
+  const levenshteinDistance = (a: string, b: string): number => {
+    const m = a.length;
+    const n = b.length;
+    const dp: number[][] = Array.from({ length: m + 1 }, () =>
+      Array(n + 1).fill(0)
+    );
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (a[i - 1] === b[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1];
+        } else {
+          dp[i][j] =
+            1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+        }
+      }
+    }
+    return dp[m][n];
+  };
+
+  const similarityScore = (a: string, b: string): number => {
+    const distance = levenshteinDistance(a, b);
+    const maxLen = Math.max(a.length, b.length);
+    return maxLen === 0 ? 1 : 1 - distance / maxLen;
+  };
+
+  const findBestOverlap = (
+    prevWords: string[],
+    currWords: string[],
+    minOverlap: number = 5,
+    maxOverlap: number = 20
+  ): { overlapCount: number; score: number } => {
+    let bestOverlap = 0;
+    let bestScore = 0;
+    for (let candidate = minOverlap; candidate <= maxOverlap; candidate++) {
+      if (candidate > prevWords.length || candidate > currWords.length) break;
+      const prevOverlap = prevWords.slice(-candidate).join(" ");
+      const currOverlap = currWords.slice(0, candidate).join(" ");
+      const score = similarityScore(
+        prevOverlap.toLowerCase(),
+        currOverlap.toLowerCase()
+      );
+      if (score > bestScore) {
+        bestScore = score;
+        bestOverlap = candidate;
+      }
+    }
+    return { overlapCount: bestOverlap, score: bestScore };
+  };
+
+  const improvedStitchTranscriptions = (
+    transcripts: string[],
+    appendLog: (msg: string, type?: "info" | "error") => void
+  ): string => {
+    if (transcripts.length === 0) return "";
+    let stitched = transcripts[0].trim();
+    for (let i = 1; i < transcripts.length; i++) {
+      const prevWords = stitched.split(/\s+/);
+      const currWords = transcripts[i].split(/\s+/);
+      const prevWindow = prevWords.slice(-10);
+      const { overlapCount, score } = findBestOverlap(prevWindow, currWords, 5, 20);
+      appendLog(
+        `Between segment ${i} and ${i + 1}: best overlap = ${overlapCount}, score = ${score.toFixed(
+          2
+        )}`,
+        "info"
+      );
+      let currAdjusted = transcripts[i];
+      const threshold = 0.8;
+      if (score >= threshold && overlapCount > 0) {
+        currAdjusted = currWords.slice(overlapCount).join(" ");
+        appendLog(
+          `Overlap detected (score ${score.toFixed(
+            2
+          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${
+            i + 1
+          }.`,
+          "info"
+        );
+      }
+      stitched = stitched + " " + currAdjusted;
+    }
+    return stitched.trim();
+  };
+
+  // Copy Transcription
+  const handleCopyTranscription = () => {
+    if (!transcriptionResult) return;
+    navigator.clipboard.writeText(transcriptionResult).then(
+      () => {
+        appendLog("Transcription copied to clipboard.", "info");
+      },
+      (err) => {
+        appendLog("Error copying transcription: " + err, "error");
+      }
+    );
+  };
+
+  // --------------------------------------
+  // NEW: Send the System Prompt + Transcript to LLM
+  // --------------------------------------
+  const handleSendToLLM = async () => {
+    // We’ll only demo OpenAI's chat here.
+    if (!openaiKey) {
+      appendLog("ERROR: OpenAI key not set. Please provide a valid key.", "error");
+      return;
+    }
+    if (!transcriptionResult) {
+      appendLog("No transcription found to send to the model.", "error");
+      return;
+    }
+    setIsGeneratingChat(true);
+    setChatCompletionResult("");
+    appendLog("Sending System Prompt + Transcript to OpenAI Chat...", "info");
+
+    try {
+      // Use your normal OpenAI constructor:
+      const openaiClient = new OpenAI({
+        apiKey: openaiKey,
+        dangerouslyAllowBrowser: true,
+      });
+
+      // Use the newly selected chat model from the dropdown:
+      const response = await openaiClient.chat.completions.create({
+        model: openAiChatModel, // <--- Using the new dropdown model here
+        messages: [
+          {
+            role: "system",
+            content: systemPrompt || "You are a helpful assistant.",
+          },
+          {
+            role: "user",
+            content: transcriptionResult,
+          },
+        ],
+        temperature: 1,
+        max_tokens: 1500,
+      });
+
+      // You can get the first choice:
+      const output = response.choices?.[0]?.message?.content || "";
+      setChatCompletionResult(output);
+      appendLog("Received response from OpenAI Chat.", "info");
+    } catch (err: any) {
+      appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
+    } finally {
+      setIsGeneratingChat(false);
+    }
+  };
+
+  return (
+    <div className="app-container">
+      <h2 className="header-title">Speech-to-Text: Recursive Split &amp; Stitch</h2>
+
+      <div className="control-panel">
+        <div className="control-row">
+          <label>API Provider:</label>
+          <select
+            className="control-input"
+            value={selectedApi}
+            onChange={handleApiProviderChange}
+          >
+            <option value="groq">Groq</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+
+        {selectedApi === "groq" ? (
+          <>
+            <div className="control-row">
+              <label>Groq API Key:</label>
+              <input
+                className="control-input blur"
+                type="text"
+                value={groqKey}
+                onChange={handleGroqKeyChange}
+                placeholder="Enter Groq API key"
+              />
+            </div>
+            <div className="control-row">
+              <label>Groq Model:</label>
+              <input
+                className="control-input"
+                type="text"
+                value={groqModel}
+                onChange={handleGroqModelChange}
+                placeholder="whisper-large-v3"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="control-row">
+              <label>OpenAI API Key:</label>
+              <input
+                className="control-input blur"
+                type="text"
+                value={openaiKey}
+                onChange={handleOpenaiKeyChange}
+                placeholder="Enter OpenAI API key"
+              />
+            </div>
+            <div className="control-row">
+              <label>OpenAI Model:</label>
+              <input
+                className="control-input"
+                type="text"
+                value={openaiModel}
+                onChange={handleOpenaiModelChange}
+                placeholder="whisper-1"
+              />
+            </div>
+          </>
+        )}
+
+        <div className="control-row">
+          <label>Max File Size (MB):</label>
           <input
-            type="text"
-            value={apiKey}
-            onChange={handleApiKeyChange}
-            style={{ width: "60%" }}
+            className="control-input"
+            type="number"
+            value={maxFileSizeMB}
+            onChange={handleMaxFileSizeChange}
+            min="1"
           />
-        </label>
+        </div>
+        <div className="control-row">
+          <label>Select a File:</label>
+          <input
+            className="file-input"
+            type="file"
+            accept="audio/*,video/*"
+            onChange={handleFileChange}
+          />
+        </div>
+        <button
+          className="btn-action"
+          onClick={convertToMp3}
+          disabled={transcribing}
+        >
+          {transcribing ? "Processing..." : "Convert, Split & Transcribe"}
+        </button>
       </div>
 
-      <div>
-        <h3>Select an Audio or Video File</h3>
-        <input
-          type="file"
-          accept="audio/*,video/*"
-          onChange={handleFileChange}
-        />
-      </div>
-
-      <br />
-
-      <audio ref={audioRef} controls>
-        Your browser does not support the audio element.
-      </audio>
-      <br />
-
-      <button onClick={convertToMp3} disabled={transcribing}>
-        {transcribing ? "Transcribing..." : "Convert & Transcribe"}
-      </button>
-      <p ref={messageRef}></p>
-
-      {/* Anzeige der Transkription */}
       {transcriptionResult && (
-        <div style={{ marginTop: "1rem", textAlign: "left" }}>
-          <h3>Transcription Result:</h3>
-          <pre style={{ background: "#f4f4f4", padding: "1rem" }}>
-            {transcriptionResult}
-          </pre>
+        <div className="transcript-section">
+          <div className="transcript-header">
+            <h3>Full Transcription</h3>
+            <button className="btn-copy" onClick={handleCopyTranscription}>
+              Copy
+            </button>
+          </div>
+          <textarea
+            className="transcript-output transcript-editable"
+            value={transcriptionResult}
+            onChange={(e) => setTranscriptionResult(e.target.value)}
+          />
         </div>
       )}
-    </div>
-  ) : (
-    <div style={{ textAlign: "center", marginTop: "2rem" }}>
-      <button onClick={load}>Load ffmpeg-core</button>
+
+      {selectedApi === "openai" && transcriptionResult && (
+        <div className="control-panel" style={{ marginTop: "1rem" }}>
+          <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>
+            LLM Post-Processing
+          </h3>
+
+          {/* NEW: Dropdown to select the chat LLM model */}
+          <div className="control-row" style={{ alignItems: "flex-start" }}>
+            <label>LLM Model:</label>
+            <select
+              className="control-input"
+              value={openAiChatModel}
+              onChange={handleOpenAiChatModelChange}
+            >
+              <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="o3-mini">o3-mini</option>
+              <option value="o1">o1</option>
+            </select>
+          </div>
+
+          <div className="control-row" style={{ alignItems: "flex-start" }}>
+            <label style={{ marginTop: "0.5rem" }}>System Prompt:</label>
+            <textarea
+              className="control-input"
+              style={{ minHeight: "80px" }}
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              placeholder="Enter system instructions for the LLM..."
+            />
+          </div>
+          <button
+            className="btn-action"
+            style={{ alignSelf: "flex-start", marginTop: "0.5rem" }}
+            onClick={handleSendToLLM}
+            disabled={isGeneratingChat}
+          >
+            {isGeneratingChat ? "Loading..." : "Send to OpenAI Chat"}
+          </button>
+        </div>
+      )}
+
+      {chatCompletionResult && (
+        <div className="transcript-section" style={{ marginTop: "1rem" }}>
+          <div className="transcript-header">
+            <h3>LLM Output</h3>
+          </div>
+          <pre className="transcript-output">{chatCompletionResult}</pre>
+        </div>
+      )}
+
+      <div className="log-section">
+        <h3>Unified Log Console</h3>
+        <div className="log-container" ref={logContainerRef}>
+          {logMessages.map((logMsg, idx) => {
+            const isLast = idx === logMessages.length - 1;
+            let className = "log-line";
+            if (logMsg.type === "error") {
+              className += " log-line-error";
+            } else {
+              className += isLast ? " log-line-current" : " log-line-old";
+            }
+            return (
+              <div key={idx} className={className}>
+                {logMsg.text}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
