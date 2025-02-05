@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
-import { toBlobURL, fetchFile } from "@ffmpeg/util";
+import { toBlobURL } from "@ffmpeg/util";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
 
@@ -63,7 +63,6 @@ function App() {
 
   // UI Toggles (collapsible sections)
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
 
   // ---------------------------
   //  Load FFmpeg on mount
@@ -174,7 +173,6 @@ function App() {
   // -------------------------
   // Convert + Split + Transcribe
   // -------------------------
-  // Within transcribeFile()
   const transcribeFile = async () => {
     if (!inputFile) {
       alert("No file selected!");
@@ -191,18 +189,14 @@ function App() {
 
     const ffmpeg = ffmpegRef.current;
 
-    // ----------------------------------------------------------------------------
-    // 1) MOUNT the input file via WORKERFS so we don't read it into memory at once
-    // ----------------------------------------------------------------------------
+    // 1) MOUNT the input file via WORKERFS
     const mountDir = "/mounted";
     try {
       // Make sure the directory exists in the WASM FS
-      // (Fails quietly if it already exists)
-      await ffmpeg.createDir(mountDir)
+      await ffmpeg.createDir(mountDir);
 
       // Mount the user's large input file using WORKERFS
-      await ffmpeg.mount('WORKERFS' as FFFSType, { files: [inputFile] }, mountDir);
-
+      await ffmpeg.mount("WORKERFS" as FFFSType, { files: [inputFile] }, mountDir);
 
       appendLog(`Mounted file in WORKERFS at ${mountDir}/${inputFile.name}`, "info");
     } catch (err) {
@@ -211,7 +205,6 @@ function App() {
       return;
     }
 
-    // We'll reference this mounted path below:
     const inputPath = `${mountDir}/${inputFile.name}`;
     const outputFileName = "output.mp3";
 
@@ -237,10 +230,7 @@ function App() {
       return;
     }
 
-    // ----------------------------------------------------------------
-    // 3) Now 'output.mp3' resides in the ephemeral in-memory FS
-    //    (MemFS), so we can read it directly (but watch out for size!)
-    // ----------------------------------------------------------------
+    // 3) Now 'output.mp3' resides in the ephemeral in-memory FS (MemFS)
     let mp3Data: Uint8Array;
     try {
       mp3Data = (await ffmpeg.readFile(outputFileName)) as Uint8Array;
@@ -256,9 +246,10 @@ function App() {
     let finalSegments: SegmentInfo[] = [];
 
     if (mp3Data.byteLength > MAX_BYTES) {
-      appendLog("Resulting file is greater than maximum allowed size. Splitting...", "info");
-
-      // Your existing recursiveSplitBySize logic below:
+      appendLog(
+        "Resulting file is greater than maximum allowed size. Splitting...",
+        "info"
+      );
       finalSegments = await recursiveSplitBySize(outputFileName);
     } else {
       finalSegments.push({ filename: outputFileName, size: mp3Data.byteLength });
@@ -300,7 +291,6 @@ function App() {
       appendLog("Error unmounting WORKERFS: " + err, "error");
     }
   };
-
 
   // Recursive Split
   const recursiveSplitBySize = async (filename: string): Promise<SegmentInfo[]> => {
@@ -347,9 +337,9 @@ function App() {
 
     appendLog(
       `Splitting "${filename}" at ${halfTime.toFixed(2)} s. ` +
-      `Left: 0–${leftEnd.toFixed(2)}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(
-        2
-      )}`,
+        `Left: 0–${leftEnd.toFixed(2)}, Right: ${rightStart.toFixed(
+          2
+        )}–${totalDuration.toFixed(2)}`,
       "info"
     );
 
@@ -399,7 +389,6 @@ function App() {
     const audioFile = new File([blob], filename, { type: "audio/mp3" });
 
     if (selectedApi === "groq") {
-      // GROQ-based transcription
       try {
         const groqClient = new Groq({
           apiKey: groqKey,
@@ -420,7 +409,6 @@ function App() {
         throw err;
       }
     } else {
-      // OpenAI-based transcription
       try {
         const openaiClient = new OpenAI({
           apiKey: openaiKey,
@@ -519,8 +507,7 @@ function App() {
         appendLog(
           `Overlap detected (score ${score.toFixed(
             2
-          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1
-          }.`,
+          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1}.`,
           "info"
         );
       }
@@ -601,7 +588,6 @@ function App() {
             },
           ],
           temperature: 1,
-          max_tokens: 1500,
         });
         const output = response.choices?.[0]?.message?.content || "";
         setChatCompletionResult(output);
@@ -670,7 +656,7 @@ function App() {
     <div className="app-container">
       <h2 className="header-title">Transcription & Summaries</h2>
 
-      {/* Provider & Key Panel */}
+      {/* Provider selection */}
       <div className="control-panel">
         <div className="control-row">
           <label>API Provider:</label>
@@ -684,18 +670,28 @@ function App() {
           </select>
         </div>
 
+        {/* 
+          If no key is set for the chosen provider, show a normal text input (unmasked).
+          If the key is already set, simply inform that the key is set and can be edited in Advanced.
+        */}
         {selectedApi === "groq" ? (
-          <div className="control-row">
-            <label>Groq API Key:</label>
-            <input
-              className="control-input blur"
-              type="text"
-              value={groqKey}
-              onChange={handleGroqKeyChange}
-              placeholder="Enter Groq API key"
-            />
-          </div>
-        ) : (
+          !groqKey ? (
+            <div className="control-row">
+              <label>Groq API Key:</label>
+              <input
+                className="control-input blur"
+                type="text"
+                value={groqKey}
+                onChange={handleGroqKeyChange}
+                placeholder="Enter Groq API key"
+              />
+            </div>
+          ) : (
+            <p style={{ textAlign: "left", color: "#ccc" }}>
+              <strong>Groq API Key is set.</strong> You can update it in Advanced Options.
+            </p>
+          )
+        ) : !openaiKey ? (
           <div className="control-row">
             <label>OpenAI API Key:</label>
             <input
@@ -706,55 +702,88 @@ function App() {
               placeholder="Enter OpenAI API key"
             />
           </div>
+        ) : (
+          <p style={{ textAlign: "left", color: "#ccc" }}>
+            <strong>OpenAI API Key is set.</strong> You can update it in Advanced Options.
+          </p>
         )}
 
-        {/* Toggle to Show/Hide Advanced */}
+        {/* Button to Show/Hide Advanced */}
         <button
           className="btn-action toggle-btn"
           onClick={() => setShowAdvanced(!showAdvanced)}
         >
           {showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"}
         </button>
+      </div>
 
-        {/* Advanced Panel (collapsible) */}
-        {showAdvanced && (
-          <div className="advanced-panel">
-            {selectedApi === "groq" ? (
-              <div className="control-row">
-                <label>Groq Model (Audio):</label>
-                <input
-                  className="control-input"
-                  type="text"
-                  value={groqModel}
-                  onChange={handleGroqModelChange}
-                  placeholder="e.g. whisper-large-v3"
-                />
-              </div>
-            ) : (
-              <div className="control-row">
-                <label>OpenAI Model (Audio):</label>
-                <input
-                  className="control-input"
-                  type="text"
-                  value={openaiModel}
-                  onChange={handleOpenaiModelChange}
-                  placeholder="e.g. whisper-1"
-                />
-              </div>
-            )}
+      {/* Advanced Panel (collapsible) */}
+      {showAdvanced && (
+        <div className="advanced-panel">
+          {/* 
+            If the user has set the key, show a masked input to allow changes;
+            otherwise, we omit it since the user sees the open field above.
+          */}
+          {selectedApi === "groq" && groqKey && (
             <div className="control-row">
-              <label>Max File Size (MB):</label>
+              <label>Groq API Key (masked):</label>
               <input
                 className="control-input"
-                type="number"
-                value={maxFileSizeMB}
-                onChange={handleMaxFileSizeChange}
-                min="1"
+                type="password"
+                value={groqKey}
+                onChange={handleGroqKeyChange}
               />
             </div>
+          )}
+
+          {selectedApi === "openai" && openaiKey && (
+            <div className="control-row">
+              <label>OpenAI API Key (masked):</label>
+              <input
+                className="control-input"
+                type="password"
+                value={openaiKey}
+                onChange={handleOpenaiKeyChange}
+              />
+            </div>
+          )}
+
+          {selectedApi === "groq" ? (
+            <div className="control-row">
+              <label>Groq Model (Audio):</label>
+              <input
+                className="control-input"
+                type="text"
+                value={groqModel}
+                onChange={handleGroqModelChange}
+                placeholder="e.g. whisper-large-v3"
+              />
+            </div>
+          ) : (
+            <div className="control-row">
+              <label>OpenAI Model (Audio):</label>
+              <input
+                className="control-input"
+                type="text"
+                value={openaiModel}
+                onChange={handleOpenaiModelChange}
+                placeholder="e.g. whisper-1"
+              />
+            </div>
+          )}
+
+          <div className="control-row">
+            <label>Max File Size (MB):</label>
+            <input
+              className="control-input"
+              type="number"
+              value={maxFileSizeMB}
+              onChange={handleMaxFileSizeChange}
+              min="1"
+            />
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* File Selection & Transcribe */}
       <div className="control-panel">
@@ -875,38 +904,26 @@ function App() {
         </div>
       )}
 
-      {/* Toggle for Logs */}
-      <div className="control-panel">
-        <button
-          className="btn-action toggle-btn"
-          onClick={() => setShowLogs(!showLogs)}
-        >
-          {showLogs ? "Hide Logs" : "Show Logs"}
-        </button>
-      </div>
-
-      {/* Unified Log (collapsible) */}
-      {showLogs && (
-        <div className="log-section">
-          <h3>Unified Log Console</h3>
-          <div className="log-container" ref={logContainerRef}>
-            {logMessages.map((logMsg, idx) => {
-              const isLast = idx === logMessages.length - 1;
-              let className = "log-line";
-              if (logMsg.type === "error") {
-                className += " log-line-error";
-              } else {
-                className += isLast ? " log-line-current" : " log-line-old";
-              }
-              return (
-                <div key={idx} className={className}>
-                  {logMsg.text}
-                </div>
-              );
-            })}
-          </div>
+      {/* Always visible log section (no toggle button) */}
+      <div className="log-section" style={{ marginTop: "2rem" }}>
+        <h3>Unified Log Console</h3>
+        <div className="log-container" ref={logContainerRef}>
+          {logMessages.map((logMsg, idx) => {
+            const isLast = idx === logMessages.length - 1;
+            let className = "log-line";
+            if (logMsg.type === "error") {
+              className += " log-line-error";
+            } else {
+              className += isLast ? " log-line-current" : " log-line-old";
+            }
+            return (
+              <div key={idx} className={className}>
+                {logMsg.text}
+              </div>
+            );
+          })}
         </div>
-      )}
+      </div>
     </div>
   );
 }
