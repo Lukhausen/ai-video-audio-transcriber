@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
@@ -45,7 +45,7 @@ function App() {
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
   // --------------------------------------------------
-  // NEW: Fields for Chat LLM (both Groq and OpenAI)
+  //  Fields for Chat LLM (both Groq and OpenAI)
   // --------------------------------------------------
   const [systemPrompt, setSystemPrompt] = useState<string>("");
   const [chatCompletionResult, setChatCompletionResult] = useState<string>("");
@@ -60,6 +60,10 @@ function App() {
   const [groqChatModel, setGroqChatModel] = useState<string>(
     localStorage.getItem("groqChatModel") || "llama-3.3-70b-versatile"
   );
+
+  // UI Toggles (collapsible sections)
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
 
   // ---------------------------
   //  Load FFmpeg on mount
@@ -99,7 +103,15 @@ function App() {
     setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
   };
 
-  // Handlers for API key, model, etc.
+  // -------------------------
+  // Handle changes in UI
+  // -------------------------
+  const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const provider = e.target.value as "groq" | "openai";
+    setSelectedApi(provider);
+    appendLog(`Switched API provider to ${provider}`, "info");
+  };
+
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const key = e.target.value;
     setGroqKey(key);
@@ -143,12 +155,6 @@ function App() {
     }
   };
 
-  const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const provider = e.target.value as "groq" | "openai";
-    setSelectedApi(provider);
-    appendLog(`Switched API provider to ${provider}`, "info");
-  };
-
   // Dropdown for LLM Chat - OpenAI
   const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
@@ -168,7 +174,8 @@ function App() {
   // -------------------------
   // Convert + Split + Transcribe
   // -------------------------
-  const convertToMp3 = async () => {
+  // Within transcribeFile()
+  const transcribeFile = async () => {
     if (!inputFile) {
       alert("No file selected!");
       return;
@@ -177,76 +184,102 @@ function App() {
       alert("FFmpeg not yet loaded. Please wait...");
       return;
     }
+
     setTranscribing(true);
     setTranscriptionResult("");
     appendLog("Starting conversion to MP3...", "info");
 
     const ffmpeg = ffmpegRef.current;
-    const inputFileName = inputFile.name;
+
+    // ----------------------------------------------------------------------------
+    // 1) MOUNT the input file via WORKERFS so we don't read it into memory at once
+    // ----------------------------------------------------------------------------
+    const mountDir = "/mounted";
+    try {
+      // Make sure the directory exists in the WASM FS
+      // (Fails quietly if it already exists)
+      await ffmpeg.createDir(mountDir)
+
+      // Mount the user's large input file using WORKERFS
+      await ffmpeg.mount('WORKERFS' as FFFSType, { files: [inputFile] }, mountDir);
+
+
+      appendLog(`Mounted file in WORKERFS at ${mountDir}/${inputFile.name}`, "info");
+    } catch (err) {
+      appendLog("Error mounting WORKERFS: " + err, "error");
+      setTranscribing(false);
+      return;
+    }
+
+    // We'll reference this mounted path below:
+    const inputPath = `${mountDir}/${inputFile.name}`;
     const outputFileName = "output.mp3";
 
-    appendLog(`Writing ${inputFileName} to virtual FS...`, "info");
-    await ffmpeg.writeFile(inputFileName, await fetchFile(inputFile));
-
+    // Decide FFmpeg command
     let ffmpegCmd: string[];
     if (inputFile.type.startsWith("video/")) {
-      ffmpegCmd = ["-i", inputFileName, "-q:a", "0", "-map", "a", outputFileName];
+      // If it's a video, extract audio track
+      ffmpegCmd = ["-i", inputPath, "-q:a", "0", "-map", "a", outputFileName];
       appendLog("Detected video file – extracting audio track.", "info");
     } else {
-      ffmpegCmd = ["-i", inputFileName, outputFileName];
+      // If it's already audio, just convert to MP3
+      ffmpegCmd = ["-i", inputPath, outputFileName];
       appendLog("Detected audio file – converting to MP3.", "info");
     }
 
+    // 2) Run FFmpeg
     try {
       await ffmpeg.exec(ffmpegCmd);
-      appendLog("Conversion complete. Reading output.mp3...", "info");
+      appendLog("Conversion complete. Reading output.mp3 from memory FS...", "info");
     } catch (err) {
       appendLog("Error during conversion: " + err, "error");
       setTranscribing(false);
       return;
     }
 
-    const mp3Data = (await ffmpeg.readFile(outputFileName)) as Uint8Array;
-    const mp3Size = mp3Data.byteLength;
-    appendLog(`output.mp3 size: ${mp3Size} bytes.`, "info");
+    // ----------------------------------------------------------------
+    // 3) Now 'output.mp3' resides in the ephemeral in-memory FS
+    //    (MemFS), so we can read it directly (but watch out for size!)
+    // ----------------------------------------------------------------
+    let mp3Data: Uint8Array;
+    try {
+      mp3Data = (await ffmpeg.readFile(outputFileName)) as Uint8Array;
+    } catch (err) {
+      appendLog("Error reading output.mp3 from FS: " + err, "error");
+      setTranscribing(false);
+      return;
+    }
+    appendLog(`output.mp3 size: ${mp3Data.byteLength} bytes.`, "info");
 
+    // Check size, possibly split, then transcribe in segments...
     const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
     let finalSegments: SegmentInfo[] = [];
 
-    if (mp3Size > MAX_BYTES) {
-      appendLog("Resulting file is greater than maximum allowed size.", "info");
-      appendLog("Splitting file by size...", "info");
+    if (mp3Data.byteLength > MAX_BYTES) {
+      appendLog("Resulting file is greater than maximum allowed size. Splitting...", "info");
+
+      // Your existing recursiveSplitBySize logic below:
       finalSegments = await recursiveSplitBySize(outputFileName);
     } else {
-      appendLog("No splitting needed.", "info");
-      finalSegments.push({ filename: outputFileName, size: mp3Size });
+      finalSegments.push({ filename: outputFileName, size: mp3Data.byteLength });
     }
 
     appendLog("Starting transcription of segments...", "info");
-
-    // Process in batches of up to 10 concurrently
     const transcripts: string[] = [];
     const concurrencyLimit = 10;
+
     for (let i = 0; i < finalSegments.length; i += concurrencyLimit) {
       const batch = finalSegments.slice(i, i + concurrencyLimit);
-      appendLog(
-        `Processing batch ${Math.floor(i / concurrencyLimit) + 1} of ${Math.ceil(
-          finalSegments.length / concurrencyLimit
-        )}...`,
-        "info"
-      );
       try {
         const batchResults = await Promise.all(
           batch.map((seg) => transcribeSegment(seg.filename))
         );
         transcripts.push(...batchResults);
       } catch (err: any) {
-        appendLog(
-          `Error during batch transcription: ${err.message || err}`,
-          "error"
-        );
+        appendLog(`Error during batch transcription: ${err.message || err}`, "error");
       }
-      // If there are more segments, wait 60s before the next batch
+
+      // If more segments remain, wait 60s
       if (i + concurrencyLimit < finalSegments.length) {
         appendLog("Waiting 60 seconds before next batch...", "info");
         await new Promise((resolve) => setTimeout(resolve, 60000));
@@ -258,7 +291,16 @@ function App() {
     appendLog("All segments transcribed and stitched.", "info");
 
     setTranscribing(false);
+
+    // 4) Unmount the WORKERFS input folder (optional)
+    try {
+      await ffmpeg.unmount(mountDir);
+      appendLog("Unmounted WORKERFS at /mounted.", "info");
+    } catch (err) {
+      appendLog("Error unmounting WORKERFS: " + err, "error");
+    }
   };
+
 
   // Recursive Split
   const recursiveSplitBySize = async (filename: string): Promise<SegmentInfo[]> => {
@@ -305,7 +347,9 @@ function App() {
 
     appendLog(
       `Splitting "${filename}" at ${halfTime.toFixed(2)} s. ` +
-        `Left: 0–${leftEnd.toFixed(2)}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(2)}`,
+      `Left: 0–${leftEnd.toFixed(2)}, Right: ${rightStart.toFixed(2)}–${totalDuration.toFixed(
+        2
+      )}`,
       "info"
     );
 
@@ -475,8 +519,7 @@ function App() {
         appendLog(
           `Overlap detected (score ${score.toFixed(
             2
-          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${
-            i + 1
+          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1
           }.`,
           "info"
         );
@@ -487,7 +530,7 @@ function App() {
   };
 
   // --------------------------------
-  // Copy Transcription
+  // Copy, Download, and Clear
   // --------------------------------
   const handleCopyTranscription = () => {
     if (!transcriptionResult) return;
@@ -501,8 +544,29 @@ function App() {
     );
   };
 
+  const handleDownloadTranscription = () => {
+    if (!transcriptionResult) return;
+    const blob = new Blob([transcriptionResult], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "transcription.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    appendLog("Transcription downloaded as TXT.", "info");
+  };
+
+  const handleClearTranscription = () => {
+    setTranscriptionResult("");
+    setChatCompletionResult("");
+    appendLog("Cleared transcription and LLM output.", "info");
+  };
+
   // --------------------------------------
-  // Unified function: Send to LLM (Groq or OpenAI)
+  // Send to LLM (Groq or OpenAI)
   // --------------------------------------
   const handleSendToLLM = async () => {
     if (!transcriptionResult) {
@@ -511,7 +575,6 @@ function App() {
     }
 
     if (selectedApi === "openai") {
-      // OpenAI chat
       if (!openaiKey) {
         appendLog("ERROR: OpenAI key not set. Please provide a valid key.", "error");
         return;
@@ -544,12 +607,15 @@ function App() {
         setChatCompletionResult(output);
         appendLog("Received response from OpenAI Chat.", "info");
       } catch (err: any) {
-        appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
+        appendLog(
+          "Error calling OpenAI Chat: " + (err.message || String(err)),
+          "error"
+        );
       } finally {
         setIsGeneratingChat(false);
       }
     } else {
-      // Groq chat
+      // Groq
       if (!groqKey) {
         appendLog("ERROR: Groq key not set. Please provide a valid key.", "error");
         return;
@@ -564,7 +630,6 @@ function App() {
           dangerouslyAllowBrowser: true,
         });
 
-        // We'll request the entire response in one chunk (stream = false)
         const response = await groqClient.chat.completions.create({
           model: groqChatModel,
           messages: [
@@ -584,12 +649,14 @@ function App() {
           stream: false,
         });
 
-        // If not streaming, we get the entire completion in `response.choices`
         const output = response.choices?.[0]?.message?.content || "";
         setChatCompletionResult(output);
         appendLog("Received response from Groq Chat.", "info");
       } catch (err: any) {
-        appendLog("Error calling Groq Chat: " + (err.message || String(err)), "error");
+        appendLog(
+          "Error calling Groq Chat: " + (err.message || String(err)),
+          "error"
+        );
       } finally {
         setIsGeneratingChat(false);
       }
@@ -601,9 +668,9 @@ function App() {
   // --------------------------------
   return (
     <div className="app-container">
-      <h2 className="header-title">Speech-to-Text: Recursive Split &amp; Stitch</h2>
+      <h2 className="header-title">Transcription & Summaries</h2>
 
-      {/* Control Panel for Transcription Settings */}
+      {/* Provider & Key Panel */}
       <div className="control-panel">
         <div className="control-row">
           <label>API Provider:</label>
@@ -618,65 +685,81 @@ function App() {
         </div>
 
         {selectedApi === "groq" ? (
-          <>
-            <div className="control-row">
-              <label>Groq API Key:</label>
-              <input
-                className="control-input blur"
-                type="text"
-                value={groqKey}
-                onChange={handleGroqKeyChange}
-                placeholder="Enter Groq API key"
-              />
-            </div>
-            <div className="control-row">
-              <label>Groq Model (Audio):</label>
-              <input
-                className="control-input"
-                type="text"
-                value={groqModel}
-                onChange={handleGroqModelChange}
-                placeholder="e.g. whisper-large-v3"
-              />
-            </div>
-          </>
+          <div className="control-row">
+            <label>Groq API Key:</label>
+            <input
+              className="control-input blur"
+              type="text"
+              value={groqKey}
+              onChange={handleGroqKeyChange}
+              placeholder="Enter Groq API key"
+            />
+          </div>
         ) : (
-          <>
-            <div className="control-row">
-              <label>OpenAI API Key:</label>
-              <input
-                className="control-input blur"
-                type="text"
-                value={openaiKey}
-                onChange={handleOpenaiKeyChange}
-                placeholder="Enter OpenAI API key"
-              />
-            </div>
-            <div className="control-row">
-              <label>OpenAI Model (Audio):</label>
-              <input
-                className="control-input"
-                type="text"
-                value={openaiModel}
-                onChange={handleOpenaiModelChange}
-                placeholder="e.g. whisper-1"
-              />
-            </div>
-          </>
+          <div className="control-row">
+            <label>OpenAI API Key:</label>
+            <input
+              className="control-input blur"
+              type="text"
+              value={openaiKey}
+              onChange={handleOpenaiKeyChange}
+              placeholder="Enter OpenAI API key"
+            />
+          </div>
         )}
 
+        {/* Toggle to Show/Hide Advanced */}
+        <button
+          className="btn-action toggle-btn"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+        >
+          {showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"}
+        </button>
+
+        {/* Advanced Panel (collapsible) */}
+        {showAdvanced && (
+          <div className="advanced-panel">
+            {selectedApi === "groq" ? (
+              <div className="control-row">
+                <label>Groq Model (Audio):</label>
+                <input
+                  className="control-input"
+                  type="text"
+                  value={groqModel}
+                  onChange={handleGroqModelChange}
+                  placeholder="e.g. whisper-large-v3"
+                />
+              </div>
+            ) : (
+              <div className="control-row">
+                <label>OpenAI Model (Audio):</label>
+                <input
+                  className="control-input"
+                  type="text"
+                  value={openaiModel}
+                  onChange={handleOpenaiModelChange}
+                  placeholder="e.g. whisper-1"
+                />
+              </div>
+            )}
+            <div className="control-row">
+              <label>Max File Size (MB):</label>
+              <input
+                className="control-input"
+                type="number"
+                value={maxFileSizeMB}
+                onChange={handleMaxFileSizeChange}
+                min="1"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* File Selection & Transcribe */}
+      <div className="control-panel">
         <div className="control-row">
-          <label>Max File Size (MB):</label>
-          <input
-            className="control-input"
-            type="number"
-            value={maxFileSizeMB}
-            onChange={handleMaxFileSizeChange}
-            min="1"
-          />
-        </div>
-        <div className="control-row">
-          <label>Select a File:</label>
+          <label>Select File:</label>
           <input
             className="file-input"
             type="file"
@@ -686,10 +769,10 @@ function App() {
         </div>
         <button
           className="btn-action"
-          onClick={convertToMp3}
+          onClick={transcribeFile}
           disabled={transcribing}
         >
-          {transcribing ? "Processing..." : "Convert, Split & Transcribe"}
+          {transcribing ? "Processing..." : "Transcribe File"}
         </button>
       </div>
 
@@ -698,9 +781,17 @@ function App() {
         <div className="transcript-section">
           <div className="transcript-header">
             <h3>Full Transcription</h3>
-            <button className="btn-copy" onClick={handleCopyTranscription}>
-              Copy
-            </button>
+            <div>
+              <button className="btn-copy" onClick={handleCopyTranscription}>
+                Copy
+              </button>
+              <button className="btn-copy" onClick={handleDownloadTranscription}>
+                Download .txt
+              </button>
+              <button className="btn-copy" onClick={handleClearTranscription}>
+                Clear
+              </button>
+            </div>
           </div>
           <textarea
             className="transcript-output transcript-editable"
@@ -710,10 +801,7 @@ function App() {
         </div>
       )}
 
-      {/* 
-        Show LLM Post-Processing Panel 
-        Only if we have a transcription
-      */}
+      {/* Show LLM Post-Processing Panel only if we have a transcript */}
       {transcriptionResult && (
         <div className="control-panel" style={{ marginTop: "1rem" }}>
           <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>
@@ -721,41 +809,37 @@ function App() {
           </h3>
 
           {selectedApi === "openai" ? (
-            <>
-              {/* OpenAI Chat model dropdown */}
-              <div className="control-row" style={{ alignItems: "flex-start" }}>
-                <label>LLM Model (Chat):</label>
-                <select
-                  className="control-input"
-                  value={openAiChatModel}
-                  onChange={handleOpenAiChatModelChange}
-                >
-                  <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
-                  <option value="gpt-4o-mini">gpt-4o-mini</option>
-                  <option value="o3-mini">o3-mini</option>
-                  <option value="o1">o1</option>
-                </select>
-              </div>
-            </>
+            // OpenAI Chat model dropdown
+            <div className="control-row" style={{ alignItems: "flex-start" }}>
+              <label>LLM Model (Chat):</label>
+              <select
+                className="control-input"
+                value={openAiChatModel}
+                onChange={handleOpenAiChatModelChange}
+              >
+                <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
+                <option value="gpt-4o-mini">gpt-4o-mini</option>
+                <option value="o3-mini">o3-mini</option>
+                <option value="o1">o1</option>
+              </select>
+            </div>
           ) : (
-            <>
-              {/* Groq Chat model dropdown */}
-              <div className="control-row" style={{ alignItems: "flex-start" }}>
-                <label>LLM Model (Chat):</label>
-                <select
-                  className="control-input"
-                  value={groqChatModel}
-                  onChange={handleGroqChatModelChange}
-                >
-                  <option value="llama-3.3-70b-versatile">
-                    llama-3.3-70b-versatile
-                  </option>
-                  <option value="deepseek-r1-distill-llama-70b">
-                    deepseek-r1-distill-llama-70b
-                  </option>
-                </select>
-              </div>
-            </>
+            // Groq Chat model dropdown
+            <div className="control-row" style={{ alignItems: "flex-start" }}>
+              <label>LLM Model (Chat):</label>
+              <select
+                className="control-input"
+                value={groqChatModel}
+                onChange={handleGroqChatModelChange}
+              >
+                <option value="llama-3.3-70b-versatile">
+                  llama-3.3-70b-versatile
+                </option>
+                <option value="deepseek-r1-distill-llama-70b">
+                  deepseek-r1-distill-llama-70b
+                </option>
+              </select>
+            </div>
           )}
 
           {/* System Prompt */}
@@ -769,6 +853,7 @@ function App() {
               placeholder="Enter system instructions for the LLM..."
             />
           </div>
+
           <button
             className="btn-action"
             style={{ alignSelf: "flex-start", marginTop: "0.5rem" }}
@@ -790,26 +875,38 @@ function App() {
         </div>
       )}
 
-      {/* Unified Log */}
-      <div className="log-section">
-        <h3>Unified Log Console</h3>
-        <div className="log-container" ref={logContainerRef}>
-          {logMessages.map((logMsg, idx) => {
-            const isLast = idx === logMessages.length - 1;
-            let className = "log-line";
-            if (logMsg.type === "error") {
-              className += " log-line-error";
-            } else {
-              className += isLast ? " log-line-current" : " log-line-old";
-            }
-            return (
-              <div key={idx} className={className}>
-                {logMsg.text}
-              </div>
-            );
-          })}
-        </div>
+      {/* Toggle for Logs */}
+      <div className="control-panel">
+        <button
+          className="btn-action toggle-btn"
+          onClick={() => setShowLogs(!showLogs)}
+        >
+          {showLogs ? "Hide Logs" : "Show Logs"}
+        </button>
       </div>
+
+      {/* Unified Log (collapsible) */}
+      {showLogs && (
+        <div className="log-section">
+          <h3>Unified Log Console</h3>
+          <div className="log-container" ref={logContainerRef}>
+            {logMessages.map((logMsg, idx) => {
+              const isLast = idx === logMessages.length - 1;
+              let className = "log-line";
+              if (logMsg.type === "error") {
+                className += " log-line-error";
+              } else {
+                className += isLast ? " log-line-current" : " log-line-old";
+              }
+              return (
+                <div key={idx} className={className}>
+                  {logMsg.text}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
