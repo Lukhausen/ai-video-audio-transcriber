@@ -1,12 +1,14 @@
+// App.tsx
 import React, { useState, useRef, useEffect } from "react";
 import { FFmpeg, FFFSType } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
 
-// Import AntD Steps, ConfigProvider, theme, and icons
-import { Steps, ConfigProvider, theme } from "antd";
-import { LoadingOutlined, CheckCircleOutlined } from "@ant-design/icons";
+// Ant Design components and icons
+import { Steps, ConfigProvider, theme, Upload, message } from "antd";
+import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined } from "@ant-design/icons";
+import type { UploadProps } from "antd/es/upload";
 
 interface SegmentInfo {
   filename: string;
@@ -18,7 +20,7 @@ interface LogMessage {
   type: "info" | "error";
 }
 
-function App() {
+const App: React.FC = () => {
   // -----------------------------------------------------------------
   // STATE
   // -----------------------------------------------------------------
@@ -28,11 +30,7 @@ function App() {
   const [transcribing, setTranscribing] = useState(false);
 
   // We have 5 steps total (0..4):
-  // 0 = Load FFmpeg
-  // 1 = Convert
-  // 2 = Split
-  // 3 = Transcribe
-  // 4 = Summarize
+  // 0 = Load FFmpeg, 1 = Convert, 2 = Split, 3 = Transcribe, 4 = Summarize
   const [pipelineStep, setPipelineStep] = useState<number>(0);
 
   // Either "groq" or "openai"
@@ -64,7 +62,7 @@ function App() {
   const [chatCompletionResult, setChatCompletionResult] = useState<string>("");
   const [isGeneratingChat, setIsGeneratingChat] = useState<boolean>(false);
 
-  // Model selections
+  // Model selections for chat
   const [openAiChatModel, setOpenAiChatModel] = useState<string>(
     localStorage.getItem("openAiChatModel") || "chatgpt-4o-latest"
   );
@@ -107,21 +105,21 @@ function App() {
     loadFFmpeg();
   }, []);
 
-  // Auto-scroll the log
+  // Auto-scroll the log container when new messages are added
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [logMessages]);
 
-  // Helper: Append log
+  // Helper: Append log message
   const appendLog = (msg: string, type: "info" | "error" = "info") => {
     const timeStamp = new Date().toLocaleTimeString();
     setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
   };
 
   // -----------------------------------------------------------------
-  // Handle changes in UI
+  // UI Handlers for API provider, keys, models, etc.
   // -----------------------------------------------------------------
   const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const provider = e.target.value as "groq" | "openai";
@@ -165,25 +163,14 @@ function App() {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.length) {
-      setInputFile(e.target.files[0]);
-      appendLog(`Selected file: ${e.target.files[0].name}`, "info");
-    }
-  };
-
-  const handleOpenAiChatModelChange = (
-    e: React.ChangeEvent<HTMLSelectElement>
-  ) => {
+  const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
     setOpenAiChatModel(chosenModel);
     localStorage.setItem("openAiChatModel", chosenModel);
     appendLog(`Set OpenAI Chat Model to "${chosenModel}".`, "info");
   };
 
-  const handleGroqChatModelChange = (
-    e: React.ChangeEvent<HTMLSelectElement>
-  ) => {
+  const handleGroqChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
     setGroqChatModel(chosenModel);
     localStorage.setItem("groqChatModel", chosenModel);
@@ -191,15 +178,15 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  Pipeline Steps: Convert (1) → Split (2) → Transcribe (3)
+  // Pipeline Steps: Convert (1) → Split (2) → Transcribe (3)
   // -----------------------------------------------------------------
   const transcribeFile = async () => {
     if (!inputFile) {
-      alert("No file selected!");
+      message.error("No file selected!");
       return;
     }
     if (!loaded) {
-      alert("FFmpeg not yet loaded. Please wait...");
+      message.error("FFmpeg not yet loaded. Please wait...");
       return;
     }
 
@@ -283,7 +270,7 @@ function App() {
         appendLog(`Error during batch transcription: ${err.message || err}`, "error");
       }
 
-      // If more segments remain, wait 60s
+      // If more segments remain, wait 60 seconds before processing next batch
       if (i + concurrencyLimit < finalSegments.length) {
         appendLog("Waiting 60 seconds before next batch...", "info");
         await new Promise((resolve) => setTimeout(resolve, 60000));
@@ -298,7 +285,7 @@ function App() {
     setPipelineStep(4);
     setTranscribing(false);
 
-    // Unmount
+    // Unmount the file system
     try {
       await ffmpeg.unmount(mountDir);
       appendLog("Unmounted WORKERFS at /mounted.", "info");
@@ -441,7 +428,7 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  Stitch multiple transcripts
+  // Stitch multiple transcripts
   // -----------------------------------------------------------------
   const levenshteinDistance = (a: string, b: string): number => {
     const m = a.length;
@@ -518,8 +505,7 @@ function App() {
         appendLog(
           `Overlap detected (score ${score.toFixed(
             2
-          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${
-            i + 1
+          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1
           }.`,
           "info"
         );
@@ -530,7 +516,7 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  Copy, Download, Clear
+  // Copy, Download, Clear Transcription
   // -----------------------------------------------------------------
   const handleCopyTranscription = () => {
     if (!transcriptionResult) return;
@@ -565,7 +551,7 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  Step 4: Summarize (LLM)
+  // Step 4: Summarize (LLM)
   // -----------------------------------------------------------------
   const handleSendToLLM = async () => {
     if (!transcriptionResult) {
@@ -659,17 +645,13 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  HELPER: Step icons
+  // Step icons helper for the Steps component
   // -----------------------------------------------------------------
   const getStepIcon = (stepIndex: number) => {
-    // If FFmpeg is not yet loaded AND we're at step 0 => show loading
     if (!loaded && stepIndex === 0) {
       return <LoadingOutlined />;
     }
-    // Show spinner if the step is "active" & still running
     if (pipelineStep === stepIndex) {
-      // Steps 0..3 are controlled by `transcribing`,
-      // Step 4 is Summarize, controlled by `isGeneratingChat`
       if (stepIndex < 4 && transcribing) {
         return <LoadingOutlined />;
       }
@@ -677,7 +659,6 @@ function App() {
         return <LoadingOutlined />;
       }
     }
-    // If stepIndex < pipelineStep => completed
     if (stepIndex < pipelineStep) {
       return <CheckCircleOutlined style={{ color: "#52c41a" }} />;
     }
@@ -685,18 +666,46 @@ function App() {
   };
 
   // -----------------------------------------------------------------
-  //  RENDER
+  // Ant Design Upload (Dragger) configuration
+  // -----------------------------------------------------------------
+  const uploadProps: UploadProps = {
+    name: "file",
+    multiple: false,
+    accept: "audio/*,video/*",
+    beforeUpload: (file: File) => {
+      setInputFile(file);
+      appendLog(`Selected file: ${file.name}`, "info");
+      // Returning false prevents automatic upload
+      return false;
+    },
+    onDrop(e) {
+      appendLog(`Dropped ${e.dataTransfer.files.length} file(s).`, "info");
+    },
+    showUploadList: {
+      showRemoveIcon: true,
+    },
+    // Remove file from state if user clicks remove
+    onRemove: () => {
+      setInputFile(null);
+      return true;
+    },
+  };
+
+  // -----------------------------------------------------------------
+  // RENDER
   // -----------------------------------------------------------------
   return (
-    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+    <ConfigProvider theme={{
+      algorithm: theme.darkAlgorithm, token: {
+        colorPrimary: '#6bc42b',
+      },
+    }}>
       <div className="app-container">
         {/* Page Title */}
         <h2 className="header-title">Audio/Video Transcription & Summaries</h2>
-
-        {/* Description below the heading */}
         <p style={{ margin: "1rem 0", fontSize: "1rem", color: "#ccc" }}>
-          Easily convert audio or video files to text, then use an LLM to
-          summarize or otherwise transform the resulting transcript. Everything Local and with your own API key.
+          Easily convert audio or video files to text, then use an LLM to summarize or otherwise transform the resulting transcript.
+          Everything runs locally and uses your own API key.
         </p>
 
         {/* API Provider & Basic Config */}
@@ -780,7 +789,6 @@ function App() {
                 />
               </div>
             )}
-
             {selectedApi === "groq" ? (
               <div className="control-row">
                 <label>Groq Model (Audio):</label>
@@ -804,7 +812,6 @@ function App() {
                 />
               </div>
             )}
-
             <div className="control-row">
               <label>Max File Size (MB):</label>
               <input
@@ -821,19 +828,24 @@ function App() {
         {/* File Selection & Transcribe */}
         <div className="control-panel">
           <div className="control-row">
-            <label>Select File:</label>
-            <input
-              className="file-input"
-              type="file"
-              accept="audio/*,video/*"
-              onChange={handleFileChange}
-            />
+            <Upload.Dragger
+              {...uploadProps}
+              maxCount={1}
+              style={{ width: "100%" }}
+            >
+              <p className="ant-upload-drag-icon">
+                <FileAddOutlined />
+              </p>
+              <p className="ant-upload-text">Click or drag file to this area to select</p>
+              <p className="ant-upload-hint">
+                Supports audio and video files. <br></br> Files are not Uploaded to any Server.
+              </p>
+            </Upload.Dragger>
           </div>
           <button
             className="btn-action"
             onClick={transcribeFile}
-            disabled={transcribing || pipelineStep < 1} 
-            // pipelineStep<1 => still loading FFmpeg
+            disabled={transcribing || pipelineStep < 1}
           >
             {transcribing ? "Processing..." : "Transcribe File"}
           </button>
@@ -864,7 +876,7 @@ function App() {
           </div>
         )}
 
-        {/* LLM Post-Processing Panel if we have a transcript */}
+        {/* LLM Post-Processing Panel */}
         {transcriptionResult && (
           <div className="control-panel" style={{ marginTop: "1rem" }}>
             <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>
@@ -945,7 +957,7 @@ function App() {
           </Steps>
         </div>
 
-        {/* Toggle button for the console */}
+        {/* Log Console Toggle */}
         <div style={{ textAlign: "right", marginBottom: "1rem" }}>
           <button
             className="btn-action"
@@ -955,7 +967,7 @@ function App() {
           </button>
         </div>
 
-        {/* Conditionally render the log console */}
+        {/* Log Console */}
         {showLogConsole && (
           <div className="log-section">
             <h3>Unified Log Console</h3>
@@ -980,6 +992,6 @@ function App() {
       </div>
     </ConfigProvider>
   );
-}
+};
 
 export default App;

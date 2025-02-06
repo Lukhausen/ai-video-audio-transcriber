@@ -190,6 +190,9 @@ body {
 .blur:placeholder-shown {
   filter: blur(0px);
 }
+.ant-upload-wrapper{
+  width: 100%;
+}
 
 /* Responsive */
 @media (max-width: 600px) {
