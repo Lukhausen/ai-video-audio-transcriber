@@ -37,7 +37,9 @@ const App: React.FC = () => {
   const [pipelineStep, setPipelineStep] = useState<number>(0);
 
   // Either "groq" or "openai"
-  const [selectedApi, setSelectedApi] = useState<"groq" | "openai">("groq");
+  const [selectedApi, setSelectedApi] = useState<"groq" | "openai">(
+    (localStorage.getItem("selectedApi") as "groq" | "openai") || "groq"
+  );
 
   // Keys, models, etc.
   const [groqKey, setGroqKey] = useState<string>(localStorage.getItem("groqKey") || "");
@@ -143,6 +145,7 @@ const App: React.FC = () => {
   const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const provider = e.target.value as "groq" | "openai";
     setSelectedApi(provider);
+    localStorage.setItem("selectedApi", provider);
     appendLog(`Switched API provider to ${provider}`, "info");
   };
 
@@ -240,7 +243,7 @@ const App: React.FC = () => {
       await ffmpeg.exec(ffmpegCmd);
       appendLog("Conversion complete. Reading output.mp3 from memory FS...", "info");
 
-      let mp3Data: Uint8Array = await ffmpeg.readFile(outputFileName);
+      let mp3Data: Uint8Array = (await ffmpeg.readFile(outputFileName)) as unknown as Uint8Array;
       appendLog(`output.mp3 size: ${mp3Data.byteLength} bytes.`, "info");
 
       // --- SPLITTING (if needed) ---
