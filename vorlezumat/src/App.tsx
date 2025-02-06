@@ -6,9 +6,11 @@ import Groq from "groq-sdk";
 import OpenAI from "openai";
 
 // Ant Design components and icons
-import { Steps, ConfigProvider, theme, Upload, message } from "antd";
+import { Steps, ConfigProvider, theme, Upload } from "antd";
 import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd/es/upload";
+
+import { ToastContainer, toast } from 'react-toastify';
 
 interface SegmentInfo {
   filename: string;
@@ -115,6 +117,12 @@ const App: React.FC = () => {
   // Helper: Append log message
   const appendLog = (msg: string, type: "info" | "error" = "info") => {
     const timeStamp = new Date().toLocaleTimeString();
+    if (type == "error") {
+      toast.error(msg);
+
+    }
+
+
     setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
   };
 
@@ -182,11 +190,11 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const transcribeFile = async () => {
     if (!inputFile) {
-      message.error("No file selected!");
+      toast.error("No file selected!");
       return;
     }
     if (!loaded) {
-      message.error("FFmpeg not yet loaded. Please wait...");
+      toast.error("FFmpeg not yet loaded. Please wait...");
       return;
     }
 
@@ -990,6 +998,7 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+      <ToastContainer autoClose={10000} />
     </ConfigProvider>
   );
 };

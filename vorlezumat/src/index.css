@@ -178,18 +178,6 @@ body {
   font-weight: bold;
 }
 
-/* Blur for API keys */
-.blur {
-  filter: blur(5px);
-}
-
-.blur:focus {
-  filter: blur(0px);
-}
-
-.blur:placeholder-shown {
-  filter: blur(0px);
-}
 .ant-upload-wrapper{
   width: 100%;
 }

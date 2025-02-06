@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "groq-sdk": "^0.15.0",
-    "openai": "^4.83.0"
-  }
-}
