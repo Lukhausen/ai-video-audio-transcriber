@@ -10,7 +10,8 @@ import { Steps, ConfigProvider, theme, Upload } from "antd";
 import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd/es/upload";
 
-import { ToastContainer, toast } from 'react-toastify';
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 
 interface SegmentInfo {
   filename: string;
@@ -39,12 +40,8 @@ const App: React.FC = () => {
   const [selectedApi, setSelectedApi] = useState<"groq" | "openai">("groq");
 
   // Keys, models, etc.
-  const [groqKey, setGroqKey] = useState<string>(
-    localStorage.getItem("groqKey") || ""
-  );
-  const [openaiKey, setOpenaiKey] = useState<string>(
-    localStorage.getItem("openaiKey") || ""
-  );
+  const [groqKey, setGroqKey] = useState<string>(localStorage.getItem("groqKey") || "");
+  const [openaiKey, setOpenaiKey] = useState<string>(localStorage.getItem("openaiKey") || "");
   const [groqModel, setGroqModel] = useState<string>(
     localStorage.getItem("groqModel") || "whisper-large-v3"
   );
@@ -79,6 +76,34 @@ const App: React.FC = () => {
   const [showLogConsole, setShowLogConsole] = useState(false);
 
   // -----------------------------------------------------------------
+  // HELPER: Append log message
+  // -----------------------------------------------------------------
+  const appendLog = (msg: string, type: "info" | "error" = "info") => {
+    const timeStamp = new Date().toLocaleTimeString();
+    if (type === "error") {
+      toast.error(msg);
+    }
+    setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
+  };
+
+  // -----------------------------------------------------------------
+  // HELPER: Create and load a new FFmpeg instance
+  // -----------------------------------------------------------------
+  const createNewFFmpeg = async (): Promise<FFmpeg> => {
+    const newFFmpeg = new FFmpeg();
+    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
+    newFFmpeg.on("log", ({ message }) => {
+      if (messageRef.current) messageRef.current.innerHTML = message;
+      appendLog(`FFmpeg: ${message}`, "info");
+    });
+    await newFFmpeg.load({
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+    });
+    appendLog("New FFmpeg instance loaded.", "info");
+    return newFFmpeg;
+  };
+
+  // -----------------------------------------------------------------
   // LOAD FFMPEG (Step 0)
   // -----------------------------------------------------------------
   useEffect(() => {
@@ -91,11 +116,9 @@ const App: React.FC = () => {
           if (messageRef.current) messageRef.current.innerHTML = message;
           appendLog(`FFmpeg: ${message}`, "info");
         });
-
         await ffmpeg.load({
           wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
         });
-
         setLoaded(true);
         appendLog("FFmpeg loaded successfully.", "info");
         // Move from Step 0 => Step 1 (Now user can proceed to Convert)
@@ -114,20 +137,8 @@ const App: React.FC = () => {
     }
   }, [logMessages]);
 
-  // Helper: Append log message
-  const appendLog = (msg: string, type: "info" | "error" = "info") => {
-    const timeStamp = new Date().toLocaleTimeString();
-    if (type == "error") {
-      toast.error(msg);
-
-    }
-
-
-    setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
-  };
-
   // -----------------------------------------------------------------
-  // UI Handlers for API provider, keys, models, etc.
+  // UI HANDLERS for API provider, keys, models, etc.
   // -----------------------------------------------------------------
   const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const provider = e.target.value as "groq" | "openai";
@@ -186,7 +197,7 @@ const App: React.FC = () => {
   };
 
   // -----------------------------------------------------------------
-  // Pipeline Steps: Convert (1) → Split (2) → Transcribe (3)
+  // PIPELINE: Convert (1) → Split (2) → Transcribe (3)
   // -----------------------------------------------------------------
   const transcribeFile = async () => {
     if (!inputFile) {
@@ -198,110 +209,118 @@ const App: React.FC = () => {
       return;
     }
 
-    // Step 1: Convert
     setTranscribing(true);
     setTranscriptionResult("");
     setPipelineStep(1);
     appendLog("Starting conversion to MP3 (Step 1)...", "info");
 
+    // Use the current FFmpeg instance from our ref.
     const ffmpeg = ffmpegRef.current;
     const mountDir = "/mounted";
+
     try {
+      // --- MOUNT ---
       await ffmpeg.createDir(mountDir);
       await ffmpeg.mount("WORKERFS" as FFFSType, { files: [inputFile] }, mountDir);
-      appendLog(`Mounted file in WORKERFS at ${mountDir}/${inputFile.name}`, "info");
-    } catch (err) {
-      appendLog("Error mounting WORKERFS: " + err, "error");
-      setTranscribing(false);
-      return;
-    }
+      appendLog(`Mounted file at ${mountDir}/${inputFile.name}`, "info");
 
-    const inputPath = `${mountDir}/${inputFile.name}`;
-    const outputFileName = "output.mp3";
+      // --- CONVERSION ---
+      const inputPath = `${mountDir}/${inputFile.name}`;
+      const outputFileName = "output.mp3";
+      let ffmpegCmd: string[];
 
-    let ffmpegCmd: string[];
-    if (inputFile.type.startsWith("video/")) {
-      ffmpegCmd = ["-i", inputPath, "-q:a", "0", "-map", "a", outputFileName];
-      appendLog("Detected video file – extracting audio track.", "info");
-    } else {
-      ffmpegCmd = ["-i", inputPath, outputFileName];
-      appendLog("Detected audio file – converting to MP3.", "info");
-    }
+      if (inputFile.type.startsWith("video/")) {
+        ffmpegCmd = ["-i", inputPath, "-q:a", "0", "-map", "a", outputFileName];
+        appendLog("Detected video file – extracting audio track.", "info");
+      } else {
+        ffmpegCmd = ["-i", inputPath, outputFileName];
+        appendLog("Detected audio file – converting to MP3.", "info");
+      }
 
-    try {
       await ffmpeg.exec(ffmpegCmd);
       appendLog("Conversion complete. Reading output.mp3 from memory FS...", "info");
-    } catch (err) {
-      appendLog("Error during conversion: " + err, "error");
-      setTranscribing(false);
-      return;
-    }
 
-    let mp3Data: Uint8Array;
-    try {
-      mp3Data = (await ffmpeg.readFile(outputFileName)) as Uint8Array;
-    } catch (err) {
-      appendLog("Error reading output.mp3 from FS: " + err, "error");
-      setTranscribing(false);
-      return;
-    }
-    appendLog(`output.mp3 size: ${mp3Data.byteLength} bytes.`, "info");
+      let mp3Data: Uint8Array = await ffmpeg.readFile(outputFileName);
+      appendLog(`output.mp3 size: ${mp3Data.byteLength} bytes.`, "info");
 
-    // Step 2: Split (if needed)
-    setPipelineStep(2);
-    appendLog("Checking if splitting is needed (Step 2)...", "info");
+      // --- SPLITTING (if needed) ---
+      setPipelineStep(2);
+      appendLog("Checking if splitting is needed (Step 2)...", "info");
+      const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
+      let finalSegments: SegmentInfo[] = [];
+      if (mp3Data.byteLength > MAX_BYTES) {
+        appendLog("File is too large, splitting it now...", "info");
+        finalSegments = await recursiveSplitBySize(outputFileName);
+      } else {
+        finalSegments.push({ filename: outputFileName, size: mp3Data.byteLength });
+      }
 
-    const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
-    let finalSegments: SegmentInfo[] = [];
-    if (mp3Data.byteLength > MAX_BYTES) {
-      appendLog("File is too large, splitting it now...", "info");
-      finalSegments = await recursiveSplitBySize(outputFileName);
-    } else {
-      finalSegments.push({ filename: outputFileName, size: mp3Data.byteLength });
-    }
+      // --- TRANSCRIPTION ---
+      setPipelineStep(3);
+      appendLog("Starting transcription (Step 3)...", "info");
 
-    // Step 3: Transcribe
-    setPipelineStep(3);
-    appendLog("Starting transcription (Step 3)...", "info");
-
-    const transcripts: string[] = [];
-    const concurrencyLimit = 10;
-
-    for (let i = 0; i < finalSegments.length; i += concurrencyLimit) {
-      const batch = finalSegments.slice(i, i + concurrencyLimit);
-      try {
+      const transcripts: string[] = [];
+      const concurrencyLimit = 10;
+      for (let i = 0; i < finalSegments.length; i += concurrencyLimit) {
+        const batch = finalSegments.slice(i, i + concurrencyLimit);
         const batchResults = await Promise.all(
           batch.map((seg) => transcribeSegment(seg.filename))
         );
         transcripts.push(...batchResults);
-      } catch (err: any) {
-        appendLog(`Error during batch transcription: ${err.message || err}`, "error");
+
+        // Wait 60 seconds before processing the next batch if needed.
+        if (i + concurrencyLimit < finalSegments.length) {
+          appendLog("Waiting 60 seconds before next batch...", "info");
+          await new Promise((resolve) => setTimeout(resolve, 60000));
+        }
       }
+      const masterTranscript = improvedStitchTranscriptions(transcripts, appendLog);
+      setTranscriptionResult(masterTranscript);
+      appendLog("All segments transcribed and stitched.", "info");
 
-      // If more segments remain, wait 60 seconds before processing next batch
-      if (i + concurrencyLimit < finalSegments.length) {
-        appendLog("Waiting 60 seconds before next batch...", "info");
-        await new Promise((resolve) => setTimeout(resolve, 60000));
-      }
-    }
-
-    const masterTranscript = improvedStitchTranscriptions(transcripts, appendLog);
-    setTranscriptionResult(masterTranscript);
-    appendLog("All segments transcribed and stitched.", "info");
-
-    // We are done with Step 3; next step is 4 => Summarize
-    setPipelineStep(4);
-    setTranscribing(false);
-
-    // Unmount the file system
-    try {
-      await ffmpeg.unmount(mountDir);
-      appendLog("Unmounted WORKERFS at /mounted.", "info");
+      // --- STEP 4: Summarize (or next steps) ---
+      setPipelineStep(4);
     } catch (err) {
-      appendLog("Error unmounting WORKERFS: " + err, "error");
+      appendLog("Error during transcription pipeline: " + err, "error");
+    } finally {
+      // --- CLEANUP SECTION ---
+      try {
+        await ffmpeg.unmount(mountDir);
+        appendLog("Unmounted WORKERFS at /mounted.", "info");
+      } catch (unmountErr) {
+        appendLog("Error unmounting WORKERFS: " + unmountErr, "error");
+      }
+
+      try {
+        // Unlink temporary files. Add any additional temporary file names as needed.
+        ffmpeg.deleteFile("output.mp3");
+      } catch (unlinkErr) {
+        appendLog("Error deleting files: " + unlinkErr, "error");
+      }
+
+      try {
+        ffmpeg.terminate();
+        appendLog("FFmpeg instance terminated. All worker data cleared.", "info");
+      } catch (termErr) {
+        appendLog("Error terminating FFmpeg: " + termErr, "error");
+      }
+
+      try {
+        // Create a fresh instance and update the ref.
+        ffmpegRef.current = await createNewFFmpeg();
+        setLoaded(true);
+        appendLog("New FFmpeg instance is ready for use.", "info");
+      } catch (newInstErr) {
+        appendLog("Error creating new FFmpeg instance: " + newInstErr, "error");
+      }
+
+      setTranscribing(false);
     }
   };
 
+  // -----------------------------------------------------------------
+  // Recursive splitting by size (if needed)
+  // -----------------------------------------------------------------
   const recursiveSplitBySize = async (filename: string): Promise<SegmentInfo[]> => {
     const ffmpeg = ffmpegRef.current;
     const fileData = (await ffmpeg.readFile(filename)) as Uint8Array;
@@ -376,6 +395,9 @@ const App: React.FC = () => {
     return [...leftSegments, ...rightSegments];
   };
 
+  // -----------------------------------------------------------------
+  // Transcribe a single segment
+  // -----------------------------------------------------------------
   const transcribeSegment = async (filename: string): Promise<string> => {
     appendLog(`Transcribing segment "${filename}"...`, "info");
     if (selectedApi === "groq" && !groqKey) {
@@ -451,8 +473,7 @@ const App: React.FC = () => {
         if (a[i - 1] === b[j - 1]) {
           dp[i][j] = dp[i - 1][j - 1];
         } else {
-          dp[i][j] =
-            1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+          dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
         }
       }
     }
@@ -477,10 +498,7 @@ const App: React.FC = () => {
       if (candidate > prevWords.length || candidate > currWords.length) break;
       const prevOverlap = prevWords.slice(-candidate).join(" ");
       const currOverlap = currWords.slice(0, candidate).join(" ");
-      const score = similarityScore(
-        prevOverlap.toLowerCase(),
-        currOverlap.toLowerCase()
-      );
+      const score = similarityScore(prevOverlap.toLowerCase(), currOverlap.toLowerCase());
       if (score > bestScore) {
         bestScore = score;
         bestOverlap = candidate;
@@ -511,10 +529,7 @@ const App: React.FC = () => {
       if (score >= threshold && overlapCount > 0) {
         currAdjusted = currWords.slice(overlapCount).join(" ");
         appendLog(
-          `Overlap detected (score ${score.toFixed(
-            2
-          )} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1
-          }.`,
+          `Overlap detected (score ${score.toFixed(2)} >= ${threshold}). Removing ${overlapCount} overlapping words from segment ${i + 1}.`,
           "info"
         );
       }
@@ -559,7 +574,7 @@ const App: React.FC = () => {
   };
 
   // -----------------------------------------------------------------
-  // Step 4: Summarize (LLM)
+  // LLM: Summarize (Step 4)
   // -----------------------------------------------------------------
   const handleSendToLLM = async () => {
     if (!transcriptionResult) {
@@ -567,7 +582,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // "Summarize" => step 4
     setPipelineStep(4);
     setIsGeneratingChat(true);
     setChatCompletionResult("");
@@ -601,10 +615,7 @@ const App: React.FC = () => {
         setChatCompletionResult(output);
         appendLog("Received response from OpenAI Chat (Step 4).", "info");
       } catch (err: any) {
-        appendLog(
-          "Error calling OpenAI Chat: " + (err.message || String(err)),
-          "error"
-        );
+        appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
       } finally {
         setIsGeneratingChat(false);
       }
@@ -642,10 +653,7 @@ const App: React.FC = () => {
         setChatCompletionResult(output);
         appendLog("Received response from Groq Chat (Step 4).", "info");
       } catch (err: any) {
-        appendLog(
-          "Error calling Groq Chat: " + (err.message || String(err)),
-          "error"
-        );
+        appendLog("Error calling Groq Chat: " + (err.message || String(err)), "error");
       } finally {
         setIsGeneratingChat(false);
       }
@@ -683,8 +691,7 @@ const App: React.FC = () => {
     beforeUpload: (file: File) => {
       setInputFile(file);
       appendLog(`Selected file: ${file.name}`, "info");
-      // Returning false prevents automatic upload
-      return false;
+      return false; // Prevent automatic upload.
     },
     onDrop(e) {
       appendLog(`Dropped ${e.dataTransfer.files.length} file(s).`, "info");
@@ -692,7 +699,6 @@ const App: React.FC = () => {
     showUploadList: {
       showRemoveIcon: true,
     },
-    // Remove file from state if user clicks remove
     onRemove: () => {
       setInputFile(null);
       return true;
@@ -703,11 +709,14 @@ const App: React.FC = () => {
   // RENDER
   // -----------------------------------------------------------------
   return (
-    <ConfigProvider theme={{
-      algorithm: theme.darkAlgorithm, token: {
-        colorPrimary: '#6bc42b',
-      },
-    }}>
+    <ConfigProvider
+      theme={{
+        algorithm: theme.darkAlgorithm,
+        token: {
+          colorPrimary: "#6bc42b",
+        },
+      }}
+    >
       <div className="app-container">
         {/* Page Title */}
         <h2 className="header-title">Audio/Video Transcription & Summaries</h2>
@@ -764,10 +773,7 @@ const App: React.FC = () => {
             </p>
           )}
 
-          <button
-            className="btn-action toggle-btn"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-          >
+          <button className="btn-action toggle-btn" onClick={() => setShowAdvanced(!showAdvanced)}>
             {showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"}
           </button>
         </div>
@@ -836,25 +842,18 @@ const App: React.FC = () => {
         {/* File Selection & Transcribe */}
         <div className="control-panel">
           <div className="control-row">
-            <Upload.Dragger
-              {...uploadProps}
-              maxCount={1}
-              style={{ width: "100%" }}
-            >
+            <Upload.Dragger {...uploadProps} maxCount={1} style={{ width: "100%" }}>
               <p className="ant-upload-drag-icon">
                 <FileAddOutlined />
               </p>
               <p className="ant-upload-text">Click or drag file to this area to select</p>
               <p className="ant-upload-hint">
-                Supports audio and video files. <br></br> Files are not Uploaded to any Server.
+                Supports audio and video files. <br />
+                Files are not Uploaded to any Server.
               </p>
             </Upload.Dragger>
           </div>
-          <button
-            className="btn-action"
-            onClick={transcribeFile}
-            disabled={transcribing || pipelineStep < 1}
-          >
+          <button className="btn-action" onClick={transcribeFile} disabled={transcribing || pipelineStep < 1}>
             {transcribing ? "Processing..." : "Transcribe File"}
           </button>
         </div>
@@ -887,17 +886,11 @@ const App: React.FC = () => {
         {/* LLM Post-Processing Panel */}
         {transcriptionResult && (
           <div className="control-panel" style={{ marginTop: "1rem" }}>
-            <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>
-              LLM Post-Processing
-            </h3>
+            <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>LLM Post-Processing</h3>
             {selectedApi === "openai" ? (
               <div className="control-row" style={{ alignItems: "flex-start" }}>
                 <label>LLM Model (Chat):</label>
-                <select
-                  className="control-input"
-                  value={openAiChatModel}
-                  onChange={handleOpenAiChatModelChange}
-                >
+                <select className="control-input" value={openAiChatModel} onChange={handleOpenAiChatModelChange}>
                   <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
                   <option value="gpt-4o-mini">gpt-4o-mini</option>
                   <option value="o3-mini">o3-mini</option>
@@ -907,21 +900,12 @@ const App: React.FC = () => {
             ) : (
               <div className="control-row" style={{ alignItems: "flex-start" }}>
                 <label>LLM Model (Chat):</label>
-                <select
-                  className="control-input"
-                  value={groqChatModel}
-                  onChange={handleGroqChatModelChange}
-                >
-                  <option value="llama-3.3-70b-versatile">
-                    llama-3.3-70b-versatile
-                  </option>
-                  <option value="deepseek-r1-distill-llama-70b">
-                    deepseek-r1-distill-llama-70b
-                  </option>
+                <select className="control-input" value={groqChatModel} onChange={handleGroqChatModelChange}>
+                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                  <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
                 </select>
               </div>
             )}
-
             <div className="control-row" style={{ alignItems: "flex-start" }}>
               <label style={{ marginTop: "0.5rem" }}>System Prompt:</label>
               <textarea
@@ -932,7 +916,6 @@ const App: React.FC = () => {
                 placeholder="Enter system instructions for the LLM..."
               />
             </div>
-
             <button
               className="btn-action"
               style={{ alignSelf: "flex-start", marginTop: "0.5rem" }}
@@ -967,10 +950,7 @@ const App: React.FC = () => {
 
         {/* Log Console Toggle */}
         <div style={{ textAlign: "right", marginBottom: "1rem" }}>
-          <button
-            className="btn-action"
-            onClick={() => setShowLogConsole((prev) => !prev)}
-          >
+          <button className="btn-action" onClick={() => setShowLogConsole((prev) => !prev)}>
             {showLogConsole ? "Hide Log Console" : "Show Log Console"}
           </button>
         </div>
