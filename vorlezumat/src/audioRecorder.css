@@ -1,0 +1,7 @@
+.audio-recorder {
+    box-shadow: none !important;
+}
+
+.audio-recorder-visualizer{
+    filter: grayscale() contrast(0) !important;
+}

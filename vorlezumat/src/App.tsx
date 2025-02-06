@@ -208,11 +208,17 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // When the recording is complete, we convert the Blob into a File and set it as the inputFile.
   const handleRecordingComplete = (blob: Blob) => {
-    const fileName = "audio_recording.mp3";
+    // Create a timestamp string that's safe for filenames.
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, "-"); // Replace colons and dots to avoid invalid filename characters
+    const fileName = `audio_recording_${timestamp}.mp3`;
+    
+    // Create the File object with the new fileName.
     const recordedFile = new File([blob], fileName, { type: blob.type });
     setInputFile(recordedFile);
     appendLog(`Voice recording saved as file: ${fileName}`, "info");
   };
+  
 
   // -----------------------------------------------------------------
   // PIPELINE: Convert (1) → Split (2) → Transcribe (3)
@@ -733,7 +739,9 @@ const App: React.FC = () => {
         algorithm: theme.darkAlgorithm,
         token: {
           colorPrimary: "#6bc42b",
+          colorLink: '#6bc42b',
         },
+        
       }}
     >
       <div className="app-container">
