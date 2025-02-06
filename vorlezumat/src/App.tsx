@@ -10,8 +10,12 @@ import { Steps, ConfigProvider, theme, Upload } from "antd";
 import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd/es/upload";
 
+// Toast notifications
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+
+// **Import the AudioRecorder component from react-audio-voice-recorder**
+import { AudioRecorder } from "react-audio-voice-recorder";
 
 interface SegmentInfo {
   filename: string;
@@ -200,15 +204,26 @@ const App: React.FC = () => {
   };
 
   // -----------------------------------------------------------------
+  // HANDLER FOR THE VOICE RECORDER
+  // -----------------------------------------------------------------
+  // When the recording is complete, we convert the Blob into a File and set it as the inputFile.
+  const handleRecordingComplete = (blob: Blob) => {
+    const fileName = "audio_recording.mp3";
+    const recordedFile = new File([blob], fileName, { type: blob.type });
+    setInputFile(recordedFile);
+    appendLog(`Voice recording saved as file: ${fileName}`, "info");
+  };
+
+  // -----------------------------------------------------------------
   // PIPELINE: Convert (1) → Split (2) → Transcribe (3)
   // -----------------------------------------------------------------
   const transcribeFile = async () => {
     if (!inputFile) {
-      toast.error("No file selected!");
+      appendLog("No file selected!", "error");
       return;
     }
     if (!loaded) {
-      toast.error("FFmpeg not yet loaded. Please wait...");
+      appendLog("FFmpeg not yet loaded. Please wait...", "error");
       return;
     }
 
@@ -687,6 +702,7 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // Ant Design Upload (Dragger) configuration
   // -----------------------------------------------------------------
+  // In your Upload.Dragger configuration:
   const uploadProps: UploadProps = {
     name: "file",
     multiple: false,
@@ -722,7 +738,7 @@ const App: React.FC = () => {
     >
       <div className="app-container">
         {/* Page Title */}
-        <h2 className="header-title">Audio/Video Transcription & Summaries</h2>
+        <h2 className="header-title">AI Audio/Video Transcription & Summaries</h2>
         <p style={{ margin: "1rem 0", fontSize: "1rem", color: "#ccc" }}>
           Easily convert audio or video files to text, then use an LLM to summarize or otherwise transform the resulting transcript.
           Everything runs locally and uses your own API key.
@@ -756,7 +772,7 @@ const App: React.FC = () => {
               </div>
             ) : (
               <p style={{ textAlign: "left", color: "#ccc" }}>
-                <strong>Groq API Key is set.</strong> Update in Advanced Options if needed.
+                Groq API Key is set. Update in Advanced Options if needed.
               </p>
             )
           ) : !openaiKey ? (
@@ -772,7 +788,7 @@ const App: React.FC = () => {
             </div>
           ) : (
             <p style={{ textAlign: "left", color: "#ccc" }}>
-              <strong>OpenAI API Key is set.</strong> Update in Advanced Options if needed.
+              OpenAI API Key is set. Update in Advanced Options if needed.
             </p>
           )}
 
@@ -844,8 +860,24 @@ const App: React.FC = () => {
 
         {/* File Selection & Transcribe */}
         <div className="control-panel">
+          {/* File Selection */}
           <div className="control-row">
-            <Upload.Dragger {...uploadProps} maxCount={1} style={{ width: "100%" }}>
+            <Upload.Dragger
+              {...uploadProps}
+              fileList={
+                inputFile
+                  ? [
+                    {
+                      uid: "-1",
+                      name: inputFile.name,
+                      status: "done",
+                      url: URL.createObjectURL(inputFile),
+                    },
+                  ]
+                  : []
+              }
+              style={{ width: "100%" }}
+            >
               <p className="ant-upload-drag-icon">
                 <FileAddOutlined />
               </p>
@@ -856,6 +888,21 @@ const App: React.FC = () => {
               </p>
             </Upload.Dragger>
           </div>
+
+          {/* Voice Recorder Integration */}
+          <div className="control-row" style={{flexDirection: "column" }}>
+          <p style={{ marginBottom: "0.5rem" }}>Or Record Your Audio</p>
+
+            <AudioRecorder
+              onRecordingComplete={handleRecordingComplete}
+              audioTrackConstraints={{
+              }}
+              downloadOnSavePress={false}
+              showVisualizer={true}
+              downloadFileExtension="mp3"
+            />
+          </div>
+
           <button className="btn-action" onClick={transcribeFile} disabled={transcribing || pipelineStep < 1}>
             {transcribing ? "Processing..." : "Transcribe File"}
           </button>

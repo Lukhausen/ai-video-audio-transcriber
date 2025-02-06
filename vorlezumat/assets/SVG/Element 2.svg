@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Ebene_2" data-name="Ebene 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 702.07 804.72">
+  <defs>
+    <style>
+      .cls-1 {
+        font-family: PerpetuaTitlingMT-Light, 'Perpetua Titling MT';
+        font-size: 713.86px;
+        font-weight: 300;
+      }
+
+      .cls-1, .cls-2 {
+        fill: #fff;
+      }
+
+      .cls-2 {
+        stroke: #fff;
+        stroke-miterlimit: 10;
+        stroke-width: .25px;
+      }
+
+      .cls-3 {
+        fill: #e6332a;
+      }
+    </style>
+  </defs>
+  <g id="Ebene_1-2" data-name="Ebene 1">
+    <rect class="cls-3" x="0" y="0" width="702.07" height="702.07" rx="351.03" ry="351.03"/>
+    <rect class="cls-2" x="240.91" y="241.37" width="46.87" height="261.13" rx="23.43" ry="23.43"/>
+    <rect class="cls-2" x="158.86" y="191.43" width="46.87" height="361.01" rx="23.43" ry="23.43"/>
+    <rect class="cls-2" x="76.81" y="291.84" width="46.87" height="160.19" rx="23.43" ry="23.43"/>
+    <rect class="cls-2" x="405" y="241.37" width="46.87" height="261.13" rx="23.43" ry="23.43" transform="translate(856.88 743.88) rotate(180)"/>
+    <rect class="cls-2" x="487.05" y="191.43" width="46.87" height="361.01" rx="23.43" ry="23.43" transform="translate(1020.98 743.88) rotate(-180)"/>
+    <rect class="cls-2" x="569.1" y="291.84" width="46.87" height="160.19" rx="23.43" ry="23.43" transform="translate(1185.07 743.88) rotate(180)"/>
+    <text class="cls-1" transform="translate(109.99 645.42)"><tspan x="0" y="0">T</tspan></text>
+  </g>
+</svg>
