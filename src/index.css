@@ -15,6 +15,13 @@ body {
   color: #e0e0e0;
 }
 
+#root{
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 100vh;
+}
+
 /* Container */
 .app-container {
   max-width: 1000px;
@@ -181,6 +188,40 @@ body {
 .ant-upload-wrapper{
   width: 100%;
 }
+
+/* Modern Footer Styling */
+footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  margin-top: 2rem;
+  background: #222; /* Dark background for contrast */
+  border-top: 1px solid #444;
+}
+
+footer p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #fff;
+}
+
+footer a {
+  color: #fff;
+  opacity: 0.4;
+  text-decoration: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+footer a:hover {
+  opacity:0.7;
+}
+
 
 /* Responsive */
 @media (max-width: 600px) {

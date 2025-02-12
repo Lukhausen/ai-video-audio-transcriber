@@ -7,7 +7,7 @@ import OpenAI from "openai";
 
 // Ant Design components and icons
 import { Steps, ConfigProvider, theme, Upload } from "antd";
-import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined } from "@ant-design/icons";
+import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined, GithubOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd/es/upload";
 
 // Toast notifications
@@ -208,16 +208,26 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // When the recording is complete, we convert the Blob into a File and set it as the inputFile.
   const handleRecordingComplete = (blob: Blob) => {
-    // Create a timestamp string that's safe for filenames.
     const now = new Date();
-    const timestamp = now.toISOString().replace(/[:.]/g, "-"); // Replace colons and dots to avoid invalid filename characters
-    const fileName = `audio_recording_${timestamp}.mp3`;
-    
+    // Get day, month, year, hours, minutes, and seconds with leading zeros
+    const day = now.getDate().toString().padStart(2, "0");
+    const month = (now.getMonth() + 1).toString().padStart(2, "0"); // Months are zero-indexed.
+    const year = now.getFullYear().toString();
+    const hours = now.getHours().toString().padStart(2, "0");
+    const minutes = now.getMinutes().toString().padStart(2, "0");
+    const seconds = now.getSeconds().toString().padStart(2, "0");
+  
+    // Use a conventional naming format: "Recording_YYYY-MM-DD_HH-MM-SS.mp3"
+    const fileName = `Recording_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.mp3`;
+  
     // Create the File object with the new fileName.
     const recordedFile = new File([blob], fileName, { type: blob.type });
     setInputFile(recordedFile);
     appendLog(`Voice recording saved as file: ${fileName}`, "info");
   };
+  
+  
+  
   
 
   // -----------------------------------------------------------------
@@ -582,14 +592,28 @@ const App: React.FC = () => {
     const blob = new Blob([transcriptionResult], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
+  
+    // Determine the base name from the input file (if available)
+    let baseName = "transcription";
+    if (inputFile) {
+      const nameParts = inputFile.name.split(".");
+      if (nameParts.length > 1) {
+        // Remove the extension
+        baseName = nameParts.slice(0, -1).join(".");
+      } else {
+        baseName = inputFile.name;
+      }
+    }
+  
     link.href = url;
-    link.download = "transcription.txt";
+    link.download = `${baseName}-transcript.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     appendLog("Transcription downloaded as TXT.", "info");
   };
+  
 
   const handleClearTranscription = () => {
     setTranscriptionResult("");
@@ -1037,6 +1061,24 @@ const App: React.FC = () => {
         )}
       </div>
       <ToastContainer autoClose={10000} />
+       {/* Modern, Slick Footer */}
+       <footer>
+       <a
+            href="https://github.com/your-repo-link" // Replace with your actual repo link
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <GithubOutlined /> view on GitHub
+          </a>
+          <a
+            href="https://lukhausen.de"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            by Lukas Marschhausen
+          </a>
+
+      </footer>
     </ConfigProvider>
   );
 };
