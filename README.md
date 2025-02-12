@@ -39,7 +39,7 @@ If you only want to use it, you can use it here: [transcribe.lukhausen.de](https
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/your-repo-link
+   git clone https://github.com/Lukhausen/ai-video-audio-transcriber/
    cd your-repo-directory
    ```
 
