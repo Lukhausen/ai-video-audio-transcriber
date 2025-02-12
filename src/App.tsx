@@ -1064,7 +1064,7 @@ const App: React.FC = () => {
        {/* Modern, Slick Footer */}
        <footer>
        <a
-            href="https://github.com/your-repo-link" // Replace with your actual repo link
+            href="https://github.com/Lukhausen/ai-video-audio-transcriber/" // Replace with your actual repo link
             target="_blank"
             rel="noopener noreferrer"
           >
