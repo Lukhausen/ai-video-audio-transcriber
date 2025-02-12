@@ -1,9 +1,6 @@
-```markdown
 # AI Audio/Video Transcription & Summaries
 
-## Live Demo
-
-Try it out now at [transcribe.lukhausen.de](https://transcribe.lukhausen.de)
+## Demo: [transcribe.lukhausen.de](https://transcribe.lukhausen.de)
 
 This is a locally running web application that converts any video or audio fileâ€”whether small or very large (up to 10GB)â€”into text using your own API keys for OpenAI or Groq Whisper. It automatically splits large files into manageable segments for processing, supports in-browser voice recording, and lets you summarize transcripts using large language models. All processing happens locally in your browser; no files are ever uploaded online.
 
@@ -12,9 +9,13 @@ This is a locally running web application that converts any video or audio fileâ
 - **Local Processing:**  
   - All conversion, splitting, transcription, and summarization occur in your browser using your own API keys.
 
-- **Media Conversion & Splitting:**  
-  - Converts any video or audio file to MP3 using FFmpeg.
+- **Large File Support**  
   - Automatically splits large files into smaller segments (tested with files up to 10GB).
+
+- **Any Input Format:**  
+  Accepts a wide range of video and audio formats, including:
+  - **Videos:** `.mp4`, `.mkv`, `.mov`, `.avi`, `.wmv`,...
+  - **Audios:** `.mp3`, `.wav`, `.aac`, `.ogg`, `.flac`,...
 
 - **Voice Recording:**  
   - Record audio directly in the browser.
@@ -24,6 +25,9 @@ This is a locally running web application that converts any video or audio fileâ
   - Summarize the transcript with large language models.
 
 ## Getting Started
+
+If you only want to use it, you can use it here: [transcribe.lukhausen.de](https://transcribe.lukhausen.de)
+
 
 ### Prerequisites
 
@@ -35,7 +39,7 @@ This is a locally running web application that converts any video or audio fileâ
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/your-repo-link
+   git clone https://github.com/Lukhausen/ai-video-audio-transcriber/
    cd your-repo-directory
    ```
 
@@ -116,4 +120,3 @@ This project is licensed under the [MIT License](LICENSE).
 
 Created by [Lukas Marschhausen](https://lukhausen.de).  
 Feel free to open an issue or contact me with any questions or suggestions.
-```
