@@ -6,8 +6,8 @@ import Groq from "groq-sdk";
 import OpenAI from "openai";
 
 // Ant Design components and icons
-import { Steps, ConfigProvider, theme, Upload } from "antd";
-import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined, GithubOutlined } from "@ant-design/icons";
+import { Steps, ConfigProvider, theme, Upload, Tag } from "antd";
+import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined, GithubOutlined} from "@ant-design/icons";
 import { FaCopy, FaFileDownload } from "react-icons/fa";
 import type { UploadProps } from "antd/es/upload";
 
@@ -18,6 +18,8 @@ import "react-toastify/dist/ReactToastify.css";
 // **Import the AudioRecorder component from react-audio-voice-recorder**
 import { AudioRecorder } from "react-audio-voice-recorder";
 
+import defaultPrompts from "./defaultPrompts.json";
+
 interface SegmentInfo {
   filename: string;
   size: number;
@@ -26,6 +28,13 @@ interface SegmentInfo {
 interface LogMessage {
   text: string;
   type: "info" | "error";
+}
+
+// NEW: PromptItem interface for the new Prompt Gallery
+interface PromptItem {
+  text: string;
+  custom?: boolean;  // defaults (preloaded) are not custom and cannot be deleted
+  lastUsed?: number;
 }
 
 const App: React.FC = () => {
@@ -81,6 +90,9 @@ const App: React.FC = () => {
 
   // Log console toggle
   const [showLogConsole, setShowLogConsole] = useState(false);
+
+  // NEW: Prompt Gallery state – now we store only full prompt text
+  const [promptGallery, setPromptGallery] = useState<PromptItem[]>([]);
 
   // -----------------------------------------------------------------
   // HELPER: Append log message
@@ -669,12 +681,7 @@ const App: React.FC = () => {
     });
   };
 
-  const handleClearTranscription = () => {
-    setTranscriptionResult("");
-    setChatCompletionResult("");
-    appendLog("Cleared transcription and LLM output.", "info");
-  };
-
+  
   // -----------------------------------------------------------------
   // LLM: Summarize (Step 4)
   // -----------------------------------------------------------------
@@ -682,6 +689,22 @@ const App: React.FC = () => {
     if (!transcriptionResult) {
       appendLog("No transcription found to send to the model.", "error");
       return;
+    }
+    // Automatically add/update the current system prompt in the gallery
+    if (systemPrompt.trim()) {
+      const idx = promptGallery.findIndex(
+        (p) => p.text.trim() === systemPrompt.trim()
+      );
+      if (idx === -1) {
+        const newPrompt: PromptItem = { text: systemPrompt.trim(), custom: true, lastUsed: Date.now() };
+        setPromptGallery((prev) => [...prev, newPrompt]);
+      } else {
+        setPromptGallery((prev) => {
+          const updated = [...prev];
+          updated[idx].lastUsed = Date.now();
+          return updated;
+        });
+      }
     }
 
     setPipelineStep(4);
@@ -809,6 +832,46 @@ const App: React.FC = () => {
   };
 
   // -----------------------------------------------------------------
+  // NEW: Initialize Prompt Gallery merging preset prompts and stored custom prompts
+  // Preset prompts come from the JSON file and are always loaded (non-deletable)
+  // Any user-added prompts (custom: true) are merged and saved in localStorage.
+  // -----------------------------------------------------------------
+  useEffect(() => {
+    const storedPrompts = localStorage.getItem("promptGallery");
+    if (storedPrompts) {
+      const parsed = JSON.parse(storedPrompts) as PromptItem[];
+      // Merge preset prompts (from defaultPrompts) with stored custom entries.
+      // Always include the presets from the JSON.
+      const merged: PromptItem[] = [
+        ...defaultPrompts.map((p) => ({ ...p })), // preset prompts from the JSON file
+        ...parsed.filter((p: PromptItem) => p.custom) // only custom prompts from storage
+      ];
+      setPromptGallery(merged);
+      localStorage.setItem("promptGallery", JSON.stringify(merged));
+    } else {
+      setPromptGallery(defaultPrompts);
+      localStorage.setItem("promptGallery", JSON.stringify(defaultPrompts));
+    }
+  }, []);
+
+  // Persist Prompt Gallery changes to localStorage
+  useEffect(() => {
+    localStorage.setItem("promptGallery", JSON.stringify(promptGallery));
+  }, [promptGallery]);
+
+  // -----------------------------------------------------------------
+  // NEW: Function to remove a prompt from the gallery (only custom prompts are removable)
+  // -----------------------------------------------------------------
+  const handleRemovePrompt = (index: number) => {
+    if (!promptGallery[index].custom) {
+      appendLog("Default prompt cannot be deleted.", "error");
+      return;
+    }
+    setPromptGallery((prev) => prev.filter((_, i) => i !== index));
+    appendLog("Prompt removed from gallery.", "info");
+  };
+
+  // -----------------------------------------------------------------
   // RENDER
   // -----------------------------------------------------------------
   return (
@@ -819,7 +882,6 @@ const App: React.FC = () => {
           colorPrimary: "#6bc42b",
           colorLink: '#6bc42b',
         },
-        
       }}
     >
       <div className="app-container">
@@ -835,7 +897,7 @@ const App: React.FC = () => {
           <div className="control-row">
             <label>API Provider:</label>
             <select
-              className="control-input"
+              className="input-standard"
               value={selectedApi}
               onChange={handleApiProviderChange}
             >
@@ -849,7 +911,7 @@ const App: React.FC = () => {
               <div className="control-row">
                 <label>Groq API Key:</label>
                 <input
-                  className="control-input blur"
+                  className="input-standard blur"
                   type="text"
                   value={groqKey}
                   onChange={handleGroqKeyChange}
@@ -865,7 +927,7 @@ const App: React.FC = () => {
             <div className="control-row">
               <label>OpenAI API Key:</label>
               <input
-                className="control-input blur"
+                className="input-standard blur"
                 type="text"
                 value={openaiKey}
                 onChange={handleOpenaiKeyChange}
@@ -878,7 +940,10 @@ const App: React.FC = () => {
             </p>
           )}
 
-          <button className="btn-action toggle-btn" onClick={() => setShowAdvanced(!showAdvanced)}>
+          <button
+            className="btn-standard"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+          >
             {showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"}
           </button>
         </div>
@@ -890,7 +955,7 @@ const App: React.FC = () => {
               <div className="control-row">
                 <label>Groq API Key (masked):</label>
                 <input
-                  className="control-input"
+                  className="input-standard"
                   type="password"
                   value={groqKey}
                   onChange={handleGroqKeyChange}
@@ -901,7 +966,7 @@ const App: React.FC = () => {
               <div className="control-row">
                 <label>OpenAI API Key (masked):</label>
                 <input
-                  className="control-input"
+                  className="input-standard"
                   type="password"
                   value={openaiKey}
                   onChange={handleOpenaiKeyChange}
@@ -912,7 +977,7 @@ const App: React.FC = () => {
               <div className="control-row">
                 <label>Groq Model (Audio):</label>
                 <input
-                  className="control-input"
+                  className="input-standard"
                   type="text"
                   value={groqModel}
                   onChange={handleGroqModelChange}
@@ -923,7 +988,7 @@ const App: React.FC = () => {
               <div className="control-row">
                 <label>OpenAI Model (Audio):</label>
                 <input
-                  className="control-input"
+                  className="input-standard"
                   type="text"
                   value={openaiModel}
                   onChange={handleOpenaiModelChange}
@@ -934,7 +999,7 @@ const App: React.FC = () => {
             <div className="control-row">
               <label>Max File Size (MB):</label>
               <input
-                className="control-input"
+                className="input-standard"
                 type="number"
                 value={maxFileSizeMB}
                 onChange={handleMaxFileSizeChange}
@@ -989,7 +1054,11 @@ const App: React.FC = () => {
             />
           </div>
 
-          <button className="btn-action" onClick={transcribeFile} disabled={transcribing || pipelineStep < 1}>
+          <button
+            className="btn-standard"
+            onClick={transcribeFile}
+            disabled={transcribing || pipelineStep < 1}
+          >
             {transcribing ? "Processing..." : "Transcribe File"}
           </button>
         </div>
@@ -998,7 +1067,7 @@ const App: React.FC = () => {
         {transcriptionResult && (
           <div className="transcript-section">
             <div className="transcript-header">
-              <h3>Full Transcription</h3>
+              <h3>Transcription</h3>
               <div>
                 <button className="transcript-icon" onClick={handleCopyTranscription}>
                   <FaCopy />
@@ -1018,45 +1087,86 @@ const App: React.FC = () => {
 
         {/* LLM Post-Processing Panel */}
         {transcriptionResult && (
-          <div className="control-panel" style={{ marginTop: "1rem" }}>
-            <h3 style={{ textAlign: "left", marginBottom: "0.5rem" }}>LLM Post-Processing</h3>
-            {selectedApi === "openai" ? (
-              <div className="control-row" style={{ alignItems: "flex-start" }}>
-                <label>LLM Model (Chat):</label>
-                <select className="control-input" value={openAiChatModel} onChange={handleOpenAiChatModelChange}>
-                  <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
-                  <option value="gpt-4o-mini">gpt-4o-mini</option>
-                  <option value="o3-mini">o3-mini</option>
-                  <option value="o1">o1</option>
-                </select>
+          <div className="llm-panel">
+            <div className="llm-panel-header">
+              <h3>LLM Post-Processing</h3>
+              <div className="model-selector">
+                {selectedApi === "openai" ? (
+                  <div className="model-select-container">
+                    <label>Model:</label>
+                    <select
+                      className="input-standard"
+                      value={openAiChatModel}
+                      onChange={handleOpenAiChatModelChange}
+                    >
+                      <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini</option>
+                      <option value="o3-mini">o3-mini</option>
+                      <option value="o1">o1</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="model-select-container">
+                    <label>Model:</label>
+                    <select
+                      className="input-standard"
+                      value={groqChatModel}
+                      onChange={handleGroqChatModelChange}
+                    >
+                      <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+                      <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
+                    </select>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="control-row" style={{ alignItems: "flex-start" }}>
-                <label>LLM Model (Chat):</label>
-                <select className="control-input" value={groqChatModel} onChange={handleGroqChatModelChange}>
-                  <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
-                  <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
-                </select>
+            </div>
+
+            {/* NEW: Prompt Gallery Section */}
+            <div className="prompt-gallery-section">
+              <label className="section-label">Prompt Gallery</label>
+              <div
+                className="prompt-gallery"
+              >
+                {promptGallery.map((prompt, idx) => (
+                  <Tag
+                    key={idx}
+                    closable={prompt.custom ? true : false}
+                    onClose={prompt.custom ? () => handleRemovePrompt(idx) : undefined}
+                    onClick={() => {
+                      setSystemPrompt(prompt.text);
+                      appendLog("Applied prompt to System Prompt.", "info");
+                    }}
+                    className="prompt-tag"
+                  >
+                    <span>{prompt.text}</span>
+                  </Tag>
+                ))}
               </div>
-            )}
-            <div className="control-row" style={{ alignItems: "flex-start" }}>
-              <label style={{ marginTop: "0.5rem" }}>System Prompt:</label>
+            </div>
+
+            {/* Existing System Prompt input */}
+            <div className="system-prompt-section">
+              <label className="section-label">System Prompt</label>
               <textarea
-                className="control-input"
-                style={{ minHeight: "80px" }}
+                className="system-prompt-input"
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 placeholder="Enter system instructions for the LLM..."
               />
+              <button
+                className="btn-standard"
+                onClick={handleSendToLLM}
+                disabled={isGeneratingChat}
+              >
+                {isGeneratingChat ? (
+                  <>
+                    <LoadingOutlined /> Processing...
+                  </>
+                ) : (
+                  `Process with ${selectedApi}`
+                )}
+              </button>
             </div>
-            <button
-              className="btn-action"
-              style={{ alignSelf: "flex-start", marginTop: "0.5rem" }}
-              onClick={handleSendToLLM}
-              disabled={isGeneratingChat}
-            >
-              {isGeneratingChat ? "Loading..." : `Send to ${selectedApi} Chat`}
-            </button>
           </div>
         )}
 
@@ -1091,7 +1201,10 @@ const App: React.FC = () => {
 
         {/* Log Console Toggle */}
         <div style={{ textAlign: "right", marginBottom: "1rem" }}>
-          <button className="btn-action" onClick={() => setShowLogConsole((prev) => !prev)}>
+          <button
+            className="btn-standard"
+            onClick={() => setShowLogConsole((prev) => !prev)}
+          >
             {showLogConsole ? "Hide Log Console" : "Show Log Console"}
           </button>
         </div>

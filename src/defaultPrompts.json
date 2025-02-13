@@ -1,0 +1,14 @@
+[
+  {
+    "text": "Please summarize the following transcript.",
+    "custom": false
+  },
+  {
+    "text": "Translate the following transcript into Spanish.",
+    "custom": false
+  },
+  {
+    "text": "Extract key bullet points from the following transcript.",
+    "custom": false
+  }
+] 
