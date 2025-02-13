@@ -18,7 +18,6 @@ import "react-toastify/dist/ReactToastify.css";
 // **Import the AudioRecorder component from react-audio-voice-recorder**
 import { AudioRecorder } from "react-audio-voice-recorder";
 
-import defaultPrompts from "./defaultPrompts.json";
 import { usePromptGallery } from './hooks/usePromptGallery';
 
 interface SegmentInfo {
@@ -31,12 +30,6 @@ interface LogMessage {
   type: "info" | "error";
 }
 
-// NEW: PromptItem interface for the new Prompt Gallery
-interface PromptItem {
-  text: string;
-  custom?: boolean;  // defaults (preloaded) are not custom and cannot be deleted
-  lastUsed?: number;
-}
 
 const App: React.FC = () => {
   // -----------------------------------------------------------------
@@ -92,7 +85,7 @@ const App: React.FC = () => {
   // Log console toggle
   const [showLogConsole, setShowLogConsole] = useState(false);
 
-  // Add the hook
+  // Add the hook, which returns a combined (merged) prompt gallery.
   const { prompts, addCustomPrompt, removeCustomPrompt, updatePromptUsage } = usePromptGallery();
 
   // -----------------------------------------------------------------
@@ -692,7 +685,9 @@ const App: React.FC = () => {
       return;
     }
 
-    // Add current prompt to gallery if it's not empty
+    // Add current prompt to gallery if it's not empty.
+    // Since addCustomPrompt prepends the new item,
+    // the newest prompt will appear on top in the merged list.
     if (systemPrompt.trim()) {
       addCustomPrompt(systemPrompt);
     }
@@ -1082,6 +1077,7 @@ const App: React.FC = () => {
                     onClose={prompt.custom ? () => removeCustomPrompt(idx) : undefined}
                     onClick={() => {
                       setSystemPrompt(prompt.text);
+                      // Update usage timestamp for custom prompts only (does not trigger resorting).
                       updatePromptUsage(idx);
                       appendLog("Applied prompt to System Prompt.", "info");
                     }}

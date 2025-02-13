@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import defaultPrompts from '../defaultPrompts.json';
 
 export interface PromptItem {
@@ -8,55 +8,61 @@ export interface PromptItem {
 }
 
 export function usePromptGallery() {
-  // Initialize state with default prompts and any stored custom prompts
-  const [prompts, setPrompts] = useState<PromptItem[]>(() => {
+  // Store only custom (user‑added) prompts in state.
+  const [customPrompts, setCustomPrompts] = useState<PromptItem[]>(() => {
     try {
-      // Get custom prompts from localStorage
-      const storedCustomPrompts = localStorage.getItem('customPrompts');
-      const customPrompts = storedCustomPrompts ? JSON.parse(storedCustomPrompts) : [];
-      
-      // Combine default prompts (marked as non-custom) with stored custom prompts
-      return [
-        ...defaultPrompts.map(p => ({ ...p, custom: false })),
-        ...customPrompts
-      ];
+      const stored = localStorage.getItem('customPrompts');
+      return stored ? JSON.parse(stored) as PromptItem[] : [];
     } catch (error) {
-      console.error('Error loading prompts:', error);
-      return defaultPrompts.map(p => ({ ...p, custom: false }));
+      console.error('Error loading custom prompts:', error);
+      return [];
     }
   });
 
-  // Persist custom prompts whenever they change
+  // Persist only custom prompts to localStorage.
   useEffect(() => {
-    const customPrompts = prompts.filter(p => p.custom);
     localStorage.setItem('customPrompts', JSON.stringify(customPrompts));
-  }, [prompts]);
+  }, [customPrompts]);
 
-  // Add a new custom prompt
+  // The merged prompts: custom prompts get displayed first, then default prompts.
+  const combinedPrompts = useMemo(() => {
+    return [
+      ...customPrompts,
+      ...defaultPrompts.map(p => ({ ...p, custom: false }))
+    ];
+  }, [customPrompts]);
+
+  // Add a new custom prompt.
+  // The new prompt is prepended so that it appears at the top.
   const addCustomPrompt = (text: string) => {
     const trimmedText = text.trim();
     if (!trimmedText) return;
 
-    // Check if this prompt already exists (either as default or custom)
-    const exists = prompts.some(p => p.text.trim() === trimmedText);
-    if (exists) return;
+    // Check if this prompt already exists (check both custom and default).
+    const existsInCustom = customPrompts.some(p => p.text.trim() === trimmedText);
+    const existsInDefault = defaultPrompts.some(p => p.text.trim() === trimmedText);
+    if (existsInCustom || existsInDefault) return;
 
-    setPrompts(prev => [...prev, {
-      text: trimmedText,
-      custom: true,
-      lastUsed: Date.now()
-    }]);
+    const newPrompt: PromptItem = { text: trimmedText, custom: true, lastUsed: Date.now() };
+    // Prepend so that the new prompt is on top.
+    setCustomPrompts(prev => [newPrompt, ...prev]);
   };
 
-  // Remove a custom prompt
+  // Remove a custom prompt.
+  // The parameter 'index' here is the index in the merged (combined) array.
+  // Since default prompts appear after custom ones, if index is within [0, customPrompts.length),
+  // then remove the corresponding custom prompt.
   const removeCustomPrompt = (index: number) => {
-    if (index < 0 || index >= prompts.length || !prompts[index].custom) return;
-    setPrompts(prev => prev.filter((_, i) => i !== index));
+    if (index < 0 || index >= customPrompts.length) return;
+    setCustomPrompts(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Update lastUsed for a prompt
+  // Update lastUsed for a prompt.
+  // In this implementation updatePromptUsage doesn't re-sort the list.
+  // Only when a new prompt is added is the new ordering applied.
   const updatePromptUsage = (index: number) => {
-    setPrompts(prev => {
+    if (index < 0 || index >= customPrompts.length) return;
+    setCustomPrompts(prev => {
       const updated = [...prev];
       updated[index] = { ...updated[index], lastUsed: Date.now() };
       return updated;
@@ -64,9 +70,9 @@ export function usePromptGallery() {
   };
 
   return {
-    prompts,
+    prompts: combinedPrompts,
     addCustomPrompt,
     removeCustomPrompt,
-    updatePromptUsage
+    updatePromptUsage,
   };
 } 
