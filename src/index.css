@@ -57,6 +57,9 @@
   /* Transitions */
   --transition-fast: 0.2s ease;
   --transition-normal: 0.3s ease;
+  
+  /* New variable for error color */
+  --color-error: #f44336;
 }
 
 body {
@@ -112,16 +115,6 @@ body {
   margin-right: 1rem;
   color: #ccc;
   font-weight: 500;
-}
-
-.control-input,
-.file-input {
-  flex: 1;
-  padding: 0.5rem;
-  border: 1px solid #555;
-  border-radius: 4px;
-  background-color: #333;
-  color: #fff;
 }
 
 /* Button Styles */
@@ -232,7 +225,7 @@ body {
 }
 
 .log-line-error {
-  color: #f44336;
+  color: var(--color-error);
   font-weight: bold;
 }
 
@@ -311,7 +304,7 @@ footer a:hover {
 
 .transcript-header > div button.transcript-icon:hover {
   transform: scale(1.1);
-  color: #6bc42b; /* Use primary color from ConfigProvider */
+  color: var(--color-accent);
 }
 
 .transcript-header > div button.transcript-icon:active {
@@ -491,31 +484,6 @@ footer a:hover {
 .system-prompt-input:focus {
   border-color: var(--color-accent);
   outline: none;
-}
-
-.send-button {
-  align-self: flex-end;
-  background-color: var(--color-button);
-  color: var(--color-text-primary);
-  border: none;
-  border-radius: var(--radius-md);
-  padding: var(--spacing-md) var(--spacing-lg);
-  font-size: var(--font-size-md);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  transition: all var(--transition-fast);
-}
-
-.send-button:hover:not(:disabled) {
-  background-color: var(--color-button-hover);
-  transform: translateY(-1px);
-}
-
-.send-button:disabled {
-  background-color: var(--color-button-disabled);
-  cursor: not-allowed;
 }
 
 /* Make the grid scrollable on smaller screens */

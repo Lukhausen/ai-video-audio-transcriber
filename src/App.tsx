@@ -19,6 +19,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { AudioRecorder } from "react-audio-voice-recorder";
 
 import defaultPrompts from "./defaultPrompts.json";
+import { usePromptGallery } from './hooks/usePromptGallery';
 
 interface SegmentInfo {
   filename: string;
@@ -91,8 +92,8 @@ const App: React.FC = () => {
   // Log console toggle
   const [showLogConsole, setShowLogConsole] = useState(false);
 
-  // NEW: Prompt Gallery state – now we store only full prompt text
-  const [promptGallery, setPromptGallery] = useState<PromptItem[]>([]);
+  // Add the hook
+  const { prompts, addCustomPrompt, removeCustomPrompt, updatePromptUsage } = usePromptGallery();
 
   // -----------------------------------------------------------------
   // HELPER: Append log message
@@ -690,21 +691,10 @@ const App: React.FC = () => {
       appendLog("No transcription found to send to the model.", "error");
       return;
     }
-    // Automatically add/update the current system prompt in the gallery
+
+    // Add current prompt to gallery if it's not empty
     if (systemPrompt.trim()) {
-      const idx = promptGallery.findIndex(
-        (p) => p.text.trim() === systemPrompt.trim()
-      );
-      if (idx === -1) {
-        const newPrompt: PromptItem = { text: systemPrompt.trim(), custom: true, lastUsed: Date.now() };
-        setPromptGallery((prev) => [...prev, newPrompt]);
-      } else {
-        setPromptGallery((prev) => {
-          const updated = [...prev];
-          updated[idx].lastUsed = Date.now();
-          return updated;
-        });
-      }
+      addCustomPrompt(systemPrompt);
     }
 
     setPipelineStep(4);
@@ -829,46 +819,6 @@ const App: React.FC = () => {
       setInputFile(null);
       return true;
     },
-  };
-
-  // -----------------------------------------------------------------
-  // NEW: Initialize Prompt Gallery merging preset prompts and stored custom prompts
-  // Preset prompts come from the JSON file and are always loaded (non-deletable)
-  // Any user-added prompts (custom: true) are merged and saved in localStorage.
-  // -----------------------------------------------------------------
-  useEffect(() => {
-    const storedPrompts = localStorage.getItem("promptGallery");
-    if (storedPrompts) {
-      const parsed = JSON.parse(storedPrompts) as PromptItem[];
-      // Merge preset prompts (from defaultPrompts) with stored custom entries.
-      // Always include the presets from the JSON.
-      const merged: PromptItem[] = [
-        ...defaultPrompts.map((p) => ({ ...p })), // preset prompts from the JSON file
-        ...parsed.filter((p: PromptItem) => p.custom) // only custom prompts from storage
-      ];
-      setPromptGallery(merged);
-      localStorage.setItem("promptGallery", JSON.stringify(merged));
-    } else {
-      setPromptGallery(defaultPrompts);
-      localStorage.setItem("promptGallery", JSON.stringify(defaultPrompts));
-    }
-  }, []);
-
-  // Persist Prompt Gallery changes to localStorage
-  useEffect(() => {
-    localStorage.setItem("promptGallery", JSON.stringify(promptGallery));
-  }, [promptGallery]);
-
-  // -----------------------------------------------------------------
-  // NEW: Function to remove a prompt from the gallery (only custom prompts are removable)
-  // -----------------------------------------------------------------
-  const handleRemovePrompt = (index: number) => {
-    if (!promptGallery[index].custom) {
-      appendLog("Default prompt cannot be deleted.", "error");
-      return;
-    }
-    setPromptGallery((prev) => prev.filter((_, i) => i !== index));
-    appendLog("Prompt removed from gallery.", "info");
   };
 
   // -----------------------------------------------------------------
@@ -1124,16 +1074,15 @@ const App: React.FC = () => {
             {/* NEW: Prompt Gallery Section */}
             <div className="prompt-gallery-section">
               <label className="section-label">Prompt Gallery</label>
-              <div
-                className="prompt-gallery"
-              >
-                {promptGallery.map((prompt, idx) => (
+              <div className="prompt-gallery">
+                {prompts.map((prompt, idx) => (
                   <Tag
                     key={idx}
-                    closable={prompt.custom ? true : false}
-                    onClose={prompt.custom ? () => handleRemovePrompt(idx) : undefined}
+                    closable={prompt.custom}
+                    onClose={prompt.custom ? () => removeCustomPrompt(idx) : undefined}
                     onClick={() => {
                       setSystemPrompt(prompt.text);
+                      updatePromptUsage(idx);
                       appendLog("Applied prompt to System Prompt.", "info");
                     }}
                     className="prompt-tag"
