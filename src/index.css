@@ -229,3 +229,40 @@ footer a:hover {
     flex: 0 0 100px;
   }
 }
+
+/* Add spacing for transcript header button group */
+.transcript-header > div {
+  display: flex;
+  gap: 1rem;
+}
+
+/* Style for icon-only buttons without extra background/circle styling */
+.btn-icon {
+  padding: 0;
+  border-radius: 0;
+  width: auto;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+}
+
+/* New styles for transcript icon buttons */
+.transcript-header > div button.transcript-icon {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #e0e0e0; /* Match text color */
+  font-size: 1.5em;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.transcript-header > div button.transcript-icon:hover {
+  transform: scale(1.1);
+  color: #6bc42b; /* Use primary color from ConfigProvider */
+}
+
+.transcript-header > div button.transcript-icon:active {
+  transform: scale(0.95);
+}

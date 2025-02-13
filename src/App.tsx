@@ -8,6 +8,7 @@ import OpenAI from "openai";
 // Ant Design components and icons
 import { Steps, ConfigProvider, theme, Upload } from "antd";
 import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined, GithubOutlined } from "@ant-design/icons";
+import { FaCopy, FaFileDownload } from "react-icons/fa";
 import type { UploadProps } from "antd/es/upload";
 
 // Toast notifications
@@ -580,6 +581,10 @@ const App: React.FC = () => {
     navigator.clipboard.writeText(transcriptionResult).then(
       () => {
         appendLog("Transcription copied to clipboard.", "info");
+        toast.success("Copied to clipboard!", { 
+           autoClose: 3000, 
+           style: { backgroundColor: "#fff", color: "#000" } 
+        });
       },
       (err) => {
         appendLog("Error copying transcription: " + err, "error");
@@ -612,8 +617,57 @@ const App: React.FC = () => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     appendLog("Transcription downloaded as TXT.", "info");
+    toast.success("Download initiated!", { 
+       autoClose: 3000, 
+       style: { backgroundColor: "#fff", color: "#000" } 
+    });
   };
   
+  // New handler for copying LLM Output
+  const handleCopyLLMOutput = () => {
+    if (!chatCompletionResult) return;
+    navigator.clipboard.writeText(chatCompletionResult).then(
+      () => {
+        appendLog("LLM Output copied to clipboard.", "info");
+        toast.success("Copied to clipboard!", { 
+          autoClose: 3000, 
+          style: { backgroundColor: "#fff", color: "#000" } 
+        });
+      },
+      (err) => {
+        appendLog("Error copying LLM Output: " + err, "error");
+      }
+    );
+  };
+
+  // New handler for downloading LLM Output
+  const handleDownloadLLMOutput = () => {
+    if (!chatCompletionResult) return;
+    const blob = new Blob([chatCompletionResult], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    // Determine the base name from the original input file (if available)
+    let baseName = "llm-output";
+    if (inputFile) {
+      const nameParts = inputFile.name.split(".");
+      if (nameParts.length > 1) {
+        baseName = nameParts.slice(0, -1).join(".");
+      } else {
+        baseName = inputFile.name;
+      }
+    }
+    link.href = url;
+    link.download = `${baseName}-llm output.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    appendLog("LLM Output downloaded as TXT.", "info");
+    toast.success("Download initiated!", { 
+      autoClose: 3000, 
+      style: { backgroundColor: "#fff", color: "#000" } 
+    });
+  };
 
   const handleClearTranscription = () => {
     setTranscriptionResult("");
@@ -946,14 +1000,11 @@ const App: React.FC = () => {
             <div className="transcript-header">
               <h3>Full Transcription</h3>
               <div>
-                <button className="btn-copy" onClick={handleCopyTranscription}>
-                  Copy
+                <button className="transcript-icon" onClick={handleCopyTranscription}>
+                  <FaCopy />
                 </button>
-                <button className="btn-copy" onClick={handleDownloadTranscription}>
-                  Download .txt
-                </button>
-                <button className="btn-copy" onClick={handleClearTranscription}>
-                  Clear
+                <button className="transcript-icon" onClick={handleDownloadTranscription}>
+                  <FaFileDownload />
                 </button>
               </div>
             </div>
@@ -1014,6 +1065,14 @@ const App: React.FC = () => {
           <div className="transcript-section" style={{ marginTop: "1rem" }}>
             <div className="transcript-header">
               <h3>LLM Output</h3>
+              <div>
+                <button className="transcript-icon" onClick={handleCopyLLMOutput}>
+                  <FaCopy />
+                </button>
+                <button className="transcript-icon" onClick={handleDownloadLLMOutput}>
+                  <FaFileDownload />
+                </button>
+              </div>
             </div>
             <pre className="transcript-output">{chatCompletionResult}</pre>
           </div>
