@@ -23,11 +23,13 @@ import { usePromptGallery } from './hooks/usePromptGallery';
 interface SegmentInfo {
   filename: string;
   size: number;
+  url?: string;  // Add URL for audio playback
 }
 
 interface LogMessage {
   text: string;
   type: "info" | "error";
+  html?: boolean;  // Add this flag
 }
 
 
@@ -88,6 +90,14 @@ const App: React.FC = () => {
   // Add the hook, which returns a combined (merged) prompt gallery.
   const { prompts, addCustomPrompt, removeCustomPrompt, updatePromptUsage } = usePromptGallery();
 
+  // Add a state for tracking segment URLs
+  const [segmentUrls, setSegmentUrls] = useState<string[]>([]);
+
+  // Add the new state near other state declarations
+  const [sampleRate, setSampleRate] = useState<number>(
+    parseInt(localStorage.getItem("sampleRate") || "16000", 10)
+  );
+
   // -----------------------------------------------------------------
   // HELPER: Append log message
   // -----------------------------------------------------------------
@@ -96,7 +106,11 @@ const App: React.FC = () => {
     if (type === "error") {
       toast.error(msg);
     }
-    setLogMessages((prev) => [...prev, { text: `[${timeStamp}] ${msg}`, type }]);
+    setLogMessages((prev) => [...prev, { 
+      text: `[${timeStamp}] ${msg}`, 
+      type,
+      html: true  // Add this flag to indicate HTML content
+    }]);
   };
 
   // -----------------------------------------------------------------
@@ -210,6 +224,14 @@ const App: React.FC = () => {
     appendLog(`Set Groq Chat Model to "${chosenModel}".`, "info");
   };
 
+  // Add the handler for sample rate changes
+  const handleSampleRateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const rate = parseInt(e.target.value, 10);
+    setSampleRate(rate);
+    localStorage.setItem("sampleRate", rate.toString());
+    appendLog(`Audio sample rate updated to ${rate} Hz`, "info");
+  };
+
   // -----------------------------------------------------------------
   // HANDLER FOR THE VOICE RECORDER
   // -----------------------------------------------------------------
@@ -271,11 +293,24 @@ const App: React.FC = () => {
       let ffmpegCmd: string[];
 
       if (inputFile.type.startsWith("video/")) {
-        ffmpegCmd = ["-i", inputPath, "-q:a", "0", "-map", "a", outputFileName];
-        appendLog("Detected video file – extracting audio track.", "info");
+        ffmpegCmd = [
+          "-i", inputPath,
+          "-ar", sampleRate.toString(),  // Use the sample rate from state
+          "-ac", "1",      // Set to mono (1 channel)
+          "-map", "0:a",   // Extract audio
+          "-c:a", "libmp3lame", // Use MP3 codec
+          outputFileName
+        ];
+        appendLog(`Detected video file – extracting audio track with ${sampleRate}Hz mono settings.`, "info");
       } else {
-        ffmpegCmd = ["-i", inputPath, outputFileName];
-        appendLog("Detected audio file – converting to MP3.", "info");
+        ffmpegCmd = [
+          "-i", inputPath,
+          "-ar", sampleRate.toString(),  // Use the sample rate from state
+          "-ac", "1",      // Set to mono (1 channel)
+          "-c:a", "libmp3lame", // Use MP3 codec
+          outputFileName
+        ];
+        appendLog(`Detected audio file – converting to ${sampleRate}Hz mono MP3.`, "info");
       }
 
       await ffmpeg.exec(ffmpegCmd);
@@ -289,12 +324,49 @@ const App: React.FC = () => {
       appendLog("Checking if splitting is needed (Step 2)...", "info");
       const MAX_BYTES = maxFileSizeMB * 1024 * 1024;
       let finalSegments: SegmentInfo[] = [];
+      let newSegmentUrls: string[] = [];
+
       if (mp3Data.byteLength > MAX_BYTES) {
         appendLog("File is too large, splitting it now...", "info");
         finalSegments = await recursiveSplitBySize(outputFileName);
+        
+        // Create blob URLs for each segment
+        for (const segment of finalSegments) {
+          const segmentData = await ffmpeg.readFile(segment.filename) as Uint8Array;
+          const blob = new Blob([segmentData.buffer], { type: 'audio/mp3' });
+          const url = URL.createObjectURL(blob);
+          newSegmentUrls.push(url);
+          segment.url = url;
+        }
+        
+        // Add segment links to log
+        appendLog("Created audio segments:", "info");
+        finalSegments.forEach((segment, index) => {
+          appendLog(
+            `Segment ${index + 1} (${(segment.size / 1024 / 1024).toFixed(2)} MB): ` +
+            `<a href="${segment.url}" target="_blank" class="segment-link">🔊 Listen</a>`, 
+            "info"
+          );
+        });
       } else {
-        finalSegments.push({ filename: outputFileName, size: mp3Data.byteLength });
+        // Create blob URL for single file
+        const blob = new Blob([mp3Data.buffer], { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        newSegmentUrls.push(url);
+        finalSegments.push({ 
+          filename: outputFileName, 
+          size: mp3Data.byteLength,
+          url: url 
+        });
+        appendLog(
+          `Single audio file (${(mp3Data.byteLength / 1024 / 1024).toFixed(2)} MB): ` +
+          `<a href="${url}" target="_blank" class="segment-link">🔊 Listen</a>`, 
+          "info"
+        );
       }
+
+      // Update segment URLs state
+      setSegmentUrls(newSegmentUrls);
 
       // --- TRANSCRIPTION ---
       setPipelineStep(3);
@@ -816,6 +888,16 @@ const App: React.FC = () => {
     },
   };
 
+  // Add cleanup effect at component level
+  useEffect(() => {
+    return () => {
+      // Cleanup URLs when component unmounts
+      segmentUrls.forEach(url => {
+        URL.revokeObjectURL(url);
+      });
+    };
+  }, [segmentUrls]);
+
   // -----------------------------------------------------------------
   // RENDER
   // -----------------------------------------------------------------
@@ -941,6 +1023,20 @@ const App: React.FC = () => {
                 />
               </div>
             )}
+            <div className="control-row">
+              <label>Sample Rate:</label>
+              <select
+                className="input-standard"
+                value={sampleRate}
+                onChange={handleSampleRateChange}
+              >
+                <option value="8000">8 kHz</option>
+                <option value="16000">16 kHz</option>
+                <option value="22050">22.05 kHz</option>
+                <option value="44100">44.1 kHz</option>
+                <option value="48000">48 kHz</option>
+              </select>
+            </div>
             <div className="control-row">
               <label>Max File Size (MB):</label>
               <input
@@ -1157,7 +1253,7 @@ const App: React.FC = () => {
         {/* Log Console */}
         {showLogConsole && (
           <div className="log-section">
-            <h3>Unified Log Console</h3>
+            <h3>Log Console</h3>
             <div className="log-container" ref={logContainerRef}>
               {logMessages.map((logMsg, idx) => {
                 const isLast = idx === logMessages.length - 1;
@@ -1168,9 +1264,14 @@ const App: React.FC = () => {
                   className += isLast ? " log-line-current" : " log-line-old";
                 }
                 return (
-                  <div key={idx} className={className}>
-                    {logMsg.text}
-                  </div>
+                  <div 
+                    key={idx} 
+                    className={className}
+                    {...(logMsg.html 
+                      ? { dangerouslySetInnerHTML: { __html: logMsg.text } }
+                      : { children: logMsg.text }
+                    )}
+                  />
                 );
               })}
             </div>
