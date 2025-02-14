@@ -4,8 +4,6 @@ import { FFmpeg, FFFSType } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
-import Popup from 'reactjs-popup';
-import 'reactjs-popup/dist/index.css';
 
 // Ant Design components and icons
 import { Steps, ConfigProvider, theme, Upload, Tag } from "antd";
@@ -99,16 +97,6 @@ const App: React.FC = () => {
   const [sampleRate, setSampleRate] = useState<number>(
     parseInt(localStorage.getItem("sampleRate") || "16000", 10)
   );
-
-  // Add state for popup visibility and duration
-  const [showDurationWarning, setShowDurationWarning] = useState(false);
-  const [warningDuration, setWarningDuration] = useState(0);
-
-  // Add new state for bypass flag
-  const [bypassDurationCheck, setBypassDurationCheck] = useState(false);
-
-  // Add a state to track if we should start transcription
-  const [shouldStartTranscription, setShouldStartTranscription] = useState(false);
 
   // -----------------------------------------------------------------
   // HELPER: Append log message
@@ -244,28 +232,6 @@ const App: React.FC = () => {
     appendLog(`Audio sample rate updated to ${rate} Hz`, "info");
   };
 
-  // Add a helper to calculate the media duration from the input file
-  const getFileDuration = (file: File): Promise<number> => {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      let element: HTMLMediaElement;
-      if (file.type.startsWith("video")) {
-        element = document.createElement("video");
-      } else {
-        element = document.createElement("audio");
-      }
-      element.src = url;
-      element.addEventListener("loadedmetadata", () => {
-        URL.revokeObjectURL(url);
-        resolve(element.duration);
-      });
-      element.addEventListener("error", () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("Error loading media metadata"));
-      });
-    });
-  };
-
   // -----------------------------------------------------------------
   // HANDLER FOR THE VOICE RECORDER
   // -----------------------------------------------------------------
@@ -310,20 +276,6 @@ const App: React.FC = () => {
     setTranscriptionResult("");
     setPipelineStep(1);
     appendLog("Starting conversion to MP3 (Step 1)...", "info");
-
-    // Check file duration before conversion if using Groq
-    if (selectedApi === "groq" && !bypassDurationCheck) {  // Add bypass check
-      try {
-        const duration = await getFileDuration(inputFile);
-        if (duration > 7200) {
-          setWarningDuration(duration);
-          setShowDurationWarning(true);
-          return; // Stop here and wait for popup response
-        }
-      } catch (err) {
-        appendLog("Error determining file duration: " + err, "error");
-      }
-    }
 
     // Use the current FFmpeg instance from our ref.
     const ffmpeg = ffmpegRef.current;
@@ -921,7 +873,6 @@ const App: React.FC = () => {
     accept: "audio/*,video/*",
     beforeUpload: (file: File) => {
       setInputFile(file);
-      setBypassDurationCheck(false);  // Reset bypass flag
       appendLog(`Selected file: ${file.name}`, "info");
       return false; // Prevent automatic upload.
     },
@@ -946,14 +897,6 @@ const App: React.FC = () => {
       });
     };
   }, [segmentUrls]);
-
-  // Add an effect to watch for this state
-  useEffect(() => {
-    if (shouldStartTranscription) {
-      setShouldStartTranscription(false);
-      transcribeFile();
-    }
-  }, [shouldStartTranscription]);
 
   // -----------------------------------------------------------------
   // RENDER
@@ -1354,51 +1297,6 @@ const App: React.FC = () => {
           </a>
 
       </footer>
-      {/* Duration Warning Popup */}
-      <Popup
-        open={showDurationWarning}
-        onClose={() => setShowDurationWarning(false)}
-        modal
-        closeOnDocumentClick={false}
-        overlayStyle={{ background: 'rgba(0, 0, 0, 0.8)' }}
-      >
-        <div className="duration-warning-popup">
-          <h3>Warning: Long Duration</h3>
-          <p>
-            The free Groq tier only supports up to 7200 seconds (2 hours) of audio per hour.
-            Your file is {warningDuration.toFixed(2)} seconds long.
-          </p>
-          <p>
-            If you proceed, the transcription might fail or be incomplete. 
-            Consider using OpenAI's API instead for longer files.
-          </p>
-          <div className="popup-actions">
-            <button
-              className="btn-standard"
-              onClick={() => {
-                setShowDurationWarning(false);
-                setBypassDurationCheck(true);
-                setShouldStartTranscription(true);  // Set flag instead of calling transcribeFile directly
-              }}
-            >
-              Proceed Anyway
-            </button>
-            <button
-              className="btn-standard"
-              onClick={() => {
-                setShowDurationWarning(false);
-                setTranscribing(false);
-                appendLog(
-                  "Transcription cancelled due to media duration exceeding Groq free tier limit. Please use OpenAI.",
-                  "error"
-                );
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </Popup>
     </ConfigProvider>
   );
 };
