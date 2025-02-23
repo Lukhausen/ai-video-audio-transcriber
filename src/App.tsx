@@ -98,6 +98,16 @@ const App: React.FC = () => {
     parseInt(localStorage.getItem("sampleRate") || "16000", 10)
   );
 
+  // Add this to the state declarations section
+  const [autoTranscribe, setAutoTranscribe] = useState<boolean>(
+    localStorage.getItem("autoTranscribe") === "true" || false
+  );
+
+  // Add state for auto-copy to clipboard
+  const [autoCopyToClipboard, setAutoCopyToClipboard] = useState<boolean>(
+    localStorage.getItem("autoCopyToClipboard") === "true" || false
+  );
+
   // -----------------------------------------------------------------
   // HELPER: Append log message
   // -----------------------------------------------------------------
@@ -235,29 +245,35 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // HANDLER FOR THE VOICE RECORDER
   // -----------------------------------------------------------------
-  // When the recording is complete, we convert the Blob into a File and set it as the inputFile.
   const handleRecordingComplete = (blob: Blob) => {
     const now = new Date();
-    // Get day, month, year, hours, minutes, and seconds with leading zeros
     const day = now.getDate().toString().padStart(2, "0");
-    const month = (now.getMonth() + 1).toString().padStart(2, "0"); // Months are zero-indexed.
+    const month = (now.getMonth() + 1).toString().padStart(2, "0");
     const year = now.getFullYear().toString();
     const hours = now.getHours().toString().padStart(2, "0");
     const minutes = now.getMinutes().toString().padStart(2, "0");
     const seconds = now.getSeconds().toString().padStart(2, "0");
-  
-    // Use a conventional naming format: "Recording_YYYY-MM-DD_HH-MM-SS.mp3"
+
     const fileName = `Recording_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.mp3`;
-  
-    // Create the File object with the new fileName.
     const recordedFile = new File([blob], fileName, { type: blob.type });
     setInputFile(recordedFile);
     appendLog(`Voice recording saved as file: ${fileName}`, "info");
+
+    // Auto-transcription will now be triggered by the useEffect hook below
+    if (autoTranscribe) {
+      appendLog("Auto-transcribe enabled - waiting for file state to update...", "info");
+    }
   };
-  
-  
-  
-  
+
+  // -----------------------------------------------------------------
+  // useEffect HOOK TO TRIGGER AUTO-TRANSCRIBE
+  // -----------------------------------------------------------------
+  useEffect(() => {
+    if (autoTranscribe && inputFile) {
+      appendLog("inputFile state updated - starting transcription...", "info");
+      transcribeFile();
+    }
+  }, [autoTranscribe, inputFile]);
 
   // -----------------------------------------------------------------
   // PIPELINE: Convert (1) → Split (2) → Transcribe (3)
@@ -393,6 +409,13 @@ const App: React.FC = () => {
 
       // --- STEP 4: Summarize (or next steps) ---
       setPipelineStep(4);
+
+      // NEW: Auto-copy to clipboard if enabled
+      if (autoCopyToClipboard && masterTranscript) {
+        handleCopyTranscription(masterTranscript); // Call the copy function directly with the transcript
+        appendLog("Transcription auto-copied to clipboard.", "info");
+      }
+
     } catch (err) {
       appendLog("Error during transcription pipeline: " + err, "error");
     } finally {
@@ -654,14 +677,16 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // Copy, Download, Clear Transcription
   // -----------------------------------------------------------------
-  const handleCopyTranscription = () => {
-    if (!transcriptionResult) return;
-    navigator.clipboard.writeText(transcriptionResult).then(
+  const handleCopyTranscription = (textToCopy?: string | React.MouseEvent) => {
+    // If it's a MouseEvent, ignore it and use transcriptionResult
+    const text = typeof textToCopy === 'string' ? textToCopy : transcriptionResult;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(
       () => {
         appendLog("Transcription copied to clipboard.", "info");
-        toast.success("Copied to clipboard!", { 
-           autoClose: 3000, 
-           style: { backgroundColor: "#fff", color: "#000" } 
+        toast.success("Copied to clipboard!", {
+           autoClose: 3000,
+           style: { backgroundColor: "#fff", color: "#000" }
         });
       },
       (err) => {
@@ -898,6 +923,14 @@ const App: React.FC = () => {
     };
   }, [segmentUrls]);
 
+  // Add handler for the auto-copy checkbox
+  const handleAutoCopyToClipboardChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    setAutoCopyToClipboard(checked);
+    localStorage.setItem("autoCopyToClipboard", checked.toString());
+    appendLog(`Auto-copy to clipboard ${checked ? 'enabled' : 'disabled'}.`, "info");
+  };
+
   // -----------------------------------------------------------------
   // RENDER
   // -----------------------------------------------------------------
@@ -978,74 +1011,107 @@ const App: React.FC = () => {
         {/* Advanced Panel */}
         {showAdvanced && (
           <div className="advanced-panel">
-            {selectedApi === "groq" && groqKey && (
+            {/* Automation Settings First */}
+            <div className="settings-group">
+              <div className="settings-separator">
+                <span>Automation Settings</span>
+              </div>
+              
               <div className="control-row">
-                <label>Groq API Key (masked):</label>
+                <label>Transcribe Immediately After Recording:</label>
                 <input
-                  className="input-standard"
-                  type="password"
-                  value={groqKey}
-                  onChange={handleGroqKeyChange}
+                  type="checkbox"
+                  checked={autoTranscribe}
+                  onChange={(e) => setAutoTranscribe(e.target.checked)}
+                  className="checkbox-standard"
                 />
               </div>
-            )}
-            {selectedApi === "openai" && openaiKey && (
               <div className="control-row">
-                <label>OpenAI API Key (masked):</label>
+                <label>Copy Transcription to Clipboard Automatically:</label>
                 <input
-                  className="input-standard"
-                  type="password"
-                  value={openaiKey}
-                  onChange={handleOpenaiKeyChange}
+                  type="checkbox"
+                  checked={autoCopyToClipboard}
+                  onChange={handleAutoCopyToClipboardChange}
+                  className="checkbox-standard"
                 />
               </div>
-            )}
-            {selectedApi === "groq" ? (
-              <div className="control-row">
-                <label>Groq Model (Audio):</label>
-                <input
-                  className="input-standard"
-                  type="text"
-                  value={groqModel}
-                  onChange={handleGroqModelChange}
-                  placeholder="e.g. whisper-large-v3"
-                />
-              </div>
-            ) : (
-              <div className="control-row">
-                <label>OpenAI Model (Audio):</label>
-                <input
-                  className="input-standard"
-                  type="text"
-                  value={openaiModel}
-                  onChange={handleOpenaiModelChange}
-                  placeholder="e.g. whisper-1"
-                />
-              </div>
-            )}
-            <div className="control-row">
-              <label>Sample Rate:</label>
-              <select
-                className="input-standard"
-                value={sampleRate}
-                onChange={handleSampleRateChange}
-              >
-                <option value="8000">8 kHz</option>
-                <option value="16000">16 kHz</option>
-                <option value="22050">22.05 kHz</option>
-                <option value="44100">44.1 kHz</option>
-                <option value="48000">48 kHz</option>
-              </select>
             </div>
-            <div className="control-row">
-              <label>Max File Size (MB):</label>
-              <input
-                className="input-standard"
-                type="number"
-                value={maxFileSizeMB}
-                onChange={handleMaxFileSizeChange}
-                min="1"
-              />
+
+            {/* API Settings Second */}
+            <div className="settings-group">
+              <div className="settings-separator">
+                <span>API Settings</span>
+              </div>
+              
+              {selectedApi === "groq" && groqKey && (
+                <div className="control-row">
+                  <label>Groq API Key (masked):</label>
+                  <input
+                    className="input-standard"
+                    type="password"
+                    value={groqKey}
+                    onChange={handleGroqKeyChange}
+                  />
+                </div>
+              )}
+              {selectedApi === "openai" && openaiKey && (
+                <div className="control-row">
+                  <label>OpenAI API Key (masked):</label>
+                  <input
+                    className="input-standard"
+                    type="password"
+                    value={openaiKey}
+                    onChange={handleOpenaiKeyChange}
+                  />
+                </div>
+              )}
+              {selectedApi === "groq" ? (
+                <div className="control-row">
+                  <label>Groq Model (Audio):</label>
+                  <input
+                    className="input-standard"
+                    type="text"
+                    value={groqModel}
+                    onChange={handleGroqModelChange}
+                    placeholder="e.g. whisper-large-v3"
+                  />
+                </div>
+              ) : (
+                <div className="control-row">
+                  <label>OpenAI Model (Audio):</label>
+                  <input
+                    className="input-standard"
+                    type="text"
+                    value={openaiModel}
+                    onChange={handleOpenaiModelChange}
+                    placeholder="e.g. whisper-1"
+                  />
+                </div>
+              )}
+              <div className="control-row">
+                <label>Sample Rate:</label>
+                <select
+                  className="input-standard"
+                  value={sampleRate}
+                  onChange={handleSampleRateChange}
+                >
+                  <option value="8000">8 kHz</option>
+                  <option value="16000">16 kHz</option>
+                  <option value="22050">22.05 kHz</option>
+                  <option value="44100">44.1 kHz</option>
+                  <option value="48000">48 kHz</option>
+                </select>
+              </div>
+              <div className="control-row">
+                <label>Max File Size (MB):</label>
+                <input
+                  className="input-standard"
+                  type="number"
+                  value={maxFileSizeMB}
+                  onChange={handleMaxFileSizeChange}
+                  min="1"
+                />
+              </div>
             </div>
           </div>
         )}
@@ -1110,7 +1176,7 @@ const App: React.FC = () => {
             <div className="transcript-header">
               <h3>Transcription</h3>
               <div>
-                <button className="transcript-icon" onClick={handleCopyTranscription}>
+                <button className="transcript-icon" onClick={() => handleCopyTranscription()}>
                   <FaCopy />
                 </button>
                 <button className="transcript-icon" onClick={handleDownloadTranscription}>
