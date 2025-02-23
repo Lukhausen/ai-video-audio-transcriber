@@ -6,7 +6,7 @@ import Groq from "groq-sdk";
 import OpenAI from "openai";
 
 // Ant Design components and icons
-import { Steps, ConfigProvider, theme, Upload, Tag } from "antd";
+import { Steps, ConfigProvider, theme, Upload, Tag, Switch } from "antd";
 import { LoadingOutlined, CheckCircleOutlined, FileAddOutlined, GithubOutlined} from "@ant-design/icons";
 import { FaCopy, FaFileDownload } from "react-icons/fa";
 import type { UploadProps } from "antd/es/upload";
@@ -107,6 +107,9 @@ const App: React.FC = () => {
   const [autoCopyToClipboard, setAutoCopyToClipboard] = useState<boolean>(
     localStorage.getItem("autoCopyToClipboard") === "true" || false
   );
+
+  // Add a new state to track if the file is from recording
+  const [isFromRecording, setIsFromRecording] = useState<boolean>(false);
 
   // -----------------------------------------------------------------
   // HELPER: Append log message
@@ -256,24 +259,20 @@ const App: React.FC = () => {
 
     const fileName = `Recording_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.mp3`;
     const recordedFile = new File([blob], fileName, { type: blob.type });
+    setIsFromRecording(true); // Set the flag for recording
     setInputFile(recordedFile);
     appendLog(`Voice recording saved as file: ${fileName}`, "info");
-
-    // Auto-transcription will now be triggered by the useEffect hook below
-    if (autoTranscribe) {
-      appendLog("Auto-transcribe enabled - waiting for file state to update...", "info");
-    }
   };
 
   // -----------------------------------------------------------------
   // useEffect HOOK TO TRIGGER AUTO-TRANSCRIBE
   // -----------------------------------------------------------------
   useEffect(() => {
-    if (autoTranscribe && inputFile) {
+    if (autoTranscribe && inputFile && isFromRecording) {
       appendLog("inputFile state updated - starting transcription...", "info");
       transcribeFile();
     }
-  }, [autoTranscribe, inputFile]);
+  }, [autoTranscribe, inputFile, isFromRecording]);
 
   // -----------------------------------------------------------------
   // PIPELINE: Convert (1) → Split (2) → Transcribe (3)
@@ -897,6 +896,7 @@ const App: React.FC = () => {
     multiple: false,
     accept: "audio/*,video/*",
     beforeUpload: (file: File) => {
+      setIsFromRecording(false); // Reset the flag for uploads
       setInputFile(file);
       appendLog(`Selected file: ${file.name}`, "info");
       return false; // Prevent automatic upload.
@@ -909,6 +909,7 @@ const App: React.FC = () => {
     },
     onRemove: () => {
       setInputFile(null);
+      setIsFromRecording(false); // Reset the flag when removing file
       return true;
     },
   };
@@ -922,14 +923,6 @@ const App: React.FC = () => {
       });
     };
   }, [segmentUrls]);
-
-  // Add handler for the auto-copy checkbox
-  const handleAutoCopyToClipboardChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const checked = e.target.checked;
-    setAutoCopyToClipboard(checked);
-    localStorage.setItem("autoCopyToClipboard", checked.toString());
-    appendLog(`Auto-copy to clipboard ${checked ? 'enabled' : 'disabled'}.`, "info");
-  };
 
   // -----------------------------------------------------------------
   // RENDER
@@ -1019,20 +1012,24 @@ const App: React.FC = () => {
               
               <div className="control-row">
                 <label>Transcribe Immediately After Recording:</label>
-                <input
-                  type="checkbox"
+                <Switch
                   checked={autoTranscribe}
-                  onChange={(e) => setAutoTranscribe(e.target.checked)}
-                  className="checkbox-standard"
+                  onChange={(checked: boolean) => {
+                    setAutoTranscribe(checked);
+                    localStorage.setItem("autoTranscribe", checked.toString());
+                    appendLog(`Auto-transcribe ${checked ? 'enabled' : 'disabled'}.`, "info");
+                  }}
                 />
               </div>
               <div className="control-row">
                 <label>Copy Transcription to Clipboard Automatically:</label>
-                <input
-                  type="checkbox"
+                <Switch
                   checked={autoCopyToClipboard}
-                  onChange={handleAutoCopyToClipboardChange}
-                  className="checkbox-standard"
+                  onChange={(checked: boolean) => {
+                    setAutoCopyToClipboard(checked);
+                    localStorage.setItem("autoCopyToClipboard", checked.toString());
+                    appendLog(`Auto-copy to clipboard ${checked ? 'enabled' : 'disabled'}.`, "info");
+                  }}
                 />
               </div>
             </div>
