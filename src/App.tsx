@@ -1193,11 +1193,13 @@ const App: React.FC = () => {
         {transcriptionResult && (
           <div className="llm-panel">
             <div className="llm-panel-header">
-              <h3>LLM Post-Processing</h3>
-              <div className="model-selector">
-                {selectedApi === "openai" ? (
-                  <div className="model-select-container">
-                    <label>Model:</label>
+              <div className="llm-panel-title">
+                <h3>LLM Post-Processing</h3>
+              </div>
+              <div className="llm-panel-controls">
+                <div className="model-selector">
+                  <label>Model:</label>
+                  {selectedApi === "openai" ? (
                     <select
                       className="input-standard"
                       value={openAiChatModel}
@@ -1208,10 +1210,7 @@ const App: React.FC = () => {
                       <option value="o3-mini">o3-mini</option>
                       <option value="o1">o1</option>
                     </select>
-                  </div>
-                ) : (
-                  <div className="model-select-container">
-                    <label>Model:</label>
+                  ) : (
                     <select
                       className="input-standard"
                       value={groqChatModel}
@@ -1220,8 +1219,8 @@ const App: React.FC = () => {
                       <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
                       <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
                     </select>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
 
