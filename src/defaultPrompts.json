@@ -1,14 +1,14 @@
 [
   {
-    "text": "Please summarize the following transcript.",
+    "text": "Summarize this audio transcript of a lecture concisely, focusing on the main points.",
     "custom": false
   },
   {
-    "text": "Translate the following transcript into Spanish.",
+    "text": "Create a handout with key concepts and takeaways from this audio transcript of a lecture.",
     "custom": false
   },
   {
-    "text": "Extract key bullet points from the following transcript.",
+    "text": "Extract key bullet points and action items from this audio transcript of a lecture.",
     "custom": false
   }
 ] 

@@ -587,3 +587,12 @@ footer a:hover {
 .settings-separator span {
   padding: 0 1rem;
 }
+
+/* API Key message styling */
+.api-key-message {
+  text-align: left;
+  color: var(--color-text-tertiary);
+  font-size: 0.8rem;
+  margin: -0.5rem 0 0 0;
+  opacity: 0.7;
+}

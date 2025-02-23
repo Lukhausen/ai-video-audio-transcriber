@@ -972,7 +972,7 @@ const App: React.FC = () => {
                 />
               </div>
             ) : (
-              <p style={{ textAlign: "left", color: "#ccc" }}>
+              <p className="api-key-message">
                 Groq API Key is set. Update in Advanced Options if needed.
               </p>
             )
@@ -988,7 +988,7 @@ const App: React.FC = () => {
               />
             </div>
           ) : (
-            <p style={{ textAlign: "left", color: "#ccc" }}>
+            <p className="api-key-message">
               OpenAI API Key is set. Update in Advanced Options if needed.
             </p>
           )}
