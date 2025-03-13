@@ -180,7 +180,7 @@ const App: React.FC = () => {
   // LOAD FFMPEG (Step 0) as a separate function
   // -----------------------------------------------------------------
   const loadFFmpeg = async () => {
-    setStepStatus(prev => ({ ...prev, setup: "loading" }));
+    updateStepStatus("setup", "loading");
     appendLog("Loading ffmpeg-core (Step 0) ...", "info");
     
     try {
@@ -196,15 +196,12 @@ const App: React.FC = () => {
       setLoaded(true);
       appendLog("FFmpeg loaded successfully.", "info");
       
-      // Update step status
-      setStepStatus(prev => ({ ...prev, setup: "success" }));
-      
-      // Move from Step 0 => Step 1 (Now user can proceed to Convert)
-      setPipelineStep(1);
+      // Update step status and move to next step
+      updateStepStatus("setup", "success", true);
       return true;
     } catch (err) {
       appendLog("Error loading ffmpeg-core: " + err, "error");
-      setStepStatus(prev => ({ ...prev, setup: "error" }));
+      updateStepStatus("setup", "error");
       return false;
     }
   };
@@ -217,71 +214,68 @@ const App: React.FC = () => {
   }, [logMessages]);
 
   // -----------------------------------------------------------------
+  // GENERIC UI HANDLERS for API settings
+  // -----------------------------------------------------------------
+  const handleApiSettingChange = <T extends string | number>(
+    value: T,
+    setter: React.Dispatch<React.SetStateAction<T>>,
+    localStorageKey: string,
+    logMessage: string
+  ) => {
+    setter(value);
+    localStorage.setItem(localStorageKey, value.toString());
+    appendLog(logMessage, "info");
+  };
+
+  // -----------------------------------------------------------------
   // UI HANDLERS for API provider, keys, models, etc.
   // -----------------------------------------------------------------
   const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const provider = e.target.value as "groq" | "openai";
-    setSelectedApi(provider);
-    localStorage.setItem("selectedApi", provider);
-    appendLog(`Switched API provider to ${provider}`, "info");
+    handleApiSettingChange(provider, setSelectedApi, "selectedApi", `Switched API provider to ${provider}`);
   };
 
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const key = e.target.value;
-    setGroqKey(key);
-    localStorage.setItem("groqKey", key);
-    appendLog("Updated Groq API key.", "info");
+    handleApiSettingChange(key, setGroqKey, "groqKey", "Updated Groq API key.");
   };
 
   const handleOpenaiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const key = e.target.value;
-    setOpenaiKey(key);
-    localStorage.setItem("openaiKey", key);
-    appendLog("Updated OpenAI API key.", "info");
+    handleApiSettingChange(key, setOpenaiKey, "openaiKey", "Updated OpenAI API key.");
   };
 
   const handleGroqModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const model = e.target.value;
-    setGroqModel(model);
-    localStorage.setItem("groqModel", model);
-    appendLog(`Updated Groq model to "${model}".`, "info");
+    handleApiSettingChange(model, setGroqModel, "groqModel", `Updated Groq model to "${model}".`);
   };
 
   const handleOpenaiModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const model = e.target.value;
-    setOpenaiModel(model);
-    localStorage.setItem("openaiModel", model);
-    appendLog(`Updated OpenAI model to "${model}".`, "info");
+    handleApiSettingChange(model, setOpenaiModel, "openaiModel", `Updated OpenAI model to "${model}".`);
   };
 
   const handleMaxFileSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newSize = parseFloat(e.target.value);
     if (!isNaN(newSize) && newSize > 0) {
-      setMaxFileSizeMB(newSize);
-      appendLog(`Max file size updated to ${newSize} MB`, "info");
+      handleApiSettingChange(newSize, setMaxFileSizeMB, "maxFileSizeMB", `Max file size updated to ${newSize} MB`);
     }
   };
 
   const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
-    setOpenAiChatModel(chosenModel);
-    localStorage.setItem("openAiChatModel", chosenModel);
-    appendLog(`Set OpenAI Chat Model to "${chosenModel}".`, "info");
+    handleApiSettingChange(chosenModel, setOpenAiChatModel, "openAiChatModel", `Set OpenAI Chat Model to "${chosenModel}".`);
   };
 
   const handleGroqChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const chosenModel = e.target.value;
-    setGroqChatModel(chosenModel);
-    localStorage.setItem("groqChatModel", chosenModel);
-    appendLog(`Set Groq Chat Model to "${chosenModel}".`, "info");
+    handleApiSettingChange(chosenModel, setGroqChatModel, "groqChatModel", `Set Groq Chat Model to "${chosenModel}".`);
   };
 
   // Add the handler for sample rate changes
   const handleSampleRateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const rate = parseInt(e.target.value, 10);
-    setSampleRate(rate);
-    localStorage.setItem("sampleRate", rate.toString());
-    appendLog(`Audio sample rate updated to ${rate} Hz`, "info");
+    handleApiSettingChange(rate, setSampleRate, "sampleRate", `Audio sample rate updated to ${rate} Hz`);
   };
 
   // -----------------------------------------------------------------
@@ -382,7 +376,7 @@ const App: React.FC = () => {
       return false;
     }
 
-    setStepStatus(prev => ({ ...prev, convert: "loading" }));
+    updateStepStatus("convert", "loading");
     appendLog("Starting conversion to MP3 (Step 1)...", "info");
 
     // Use the current FFmpeg instance from our ref.
@@ -430,17 +424,14 @@ const App: React.FC = () => {
       // Store the MP3 data in intermediate state for potential retry
       setIntermediateData(prev => ({ ...prev, convertedMp3: mp3Data }));
 
-      // Update step status
-      setStepStatus(prev => ({ ...prev, convert: "success" }));
-      
-      // Move to the next step (splitting)
-      setPipelineStep(2);
+      // Update step status and move to the next step
+      updateStepStatus("convert", "success", true);
       
       // Automatically start the split step
       return await runSplittingStep(mp3Data);
     } catch (err) {
       appendLog("Error during conversion step: " + err, "error");
-      setStepStatus(prev => ({ ...prev, convert: "error" }));
+      updateStepStatus("convert", "error");
       
       // Attempt to clean up
       try {
@@ -457,7 +448,7 @@ const App: React.FC = () => {
   // SPLITTING Step
   // -----------------------------------------------------------------
   const runSplittingStep = async (mp3Data: Uint8Array) => {
-    setStepStatus(prev => ({ ...prev, split: "loading" }));
+    updateStepStatus("split", "loading");
     appendLog("Checking if splitting is needed (Step 2)...", "info");
     
     const ffmpeg = ffmpegRef.current;
@@ -511,17 +502,14 @@ const App: React.FC = () => {
       // Store segments for potential retry
       setIntermediateData(prev => ({ ...prev, segments: finalSegments }));
       
-      // Update step status
-      setStepStatus(prev => ({ ...prev, split: "success" }));
-      
-      // Move to the next step (transcription)
-      setPipelineStep(3);
+      // Update step status and move to the next step
+      updateStepStatus("split", "success", true);
       
       // Automatically start transcription
       return await runTranscriptionStep(finalSegments);
     } catch (err) {
       appendLog("Error during splitting step: " + err, "error");
-      setStepStatus(prev => ({ ...prev, split: "error" }));
+      updateStepStatus("split", "error");
       return false;
     }
   };
@@ -533,7 +521,7 @@ const App: React.FC = () => {
   // current API provider selection at the time it is processed.
   // -----------------------------------------------------------------
   const runTranscriptionStep = async (segments: SegmentInfo[]) => {
-    setStepStatus(prev => ({ ...prev, transcribe: "loading" }));
+    updateStepStatus("transcribe", "loading");
     appendLog("Starting transcription (Step 3)...", "info");
     appendLog(`Currently using ${selectedApi} for transcription. You can switch the provider at any time during transcription.`, "info");
     appendLog(`Each segment will use whichever provider is selected at the moment it's processed.`, "info");
@@ -566,8 +554,8 @@ const App: React.FC = () => {
       setTranscriptionResult(masterTranscript);
       appendLog("All segments transcribed and stitched.", "info");
 
-      // Update step status
-      setStepStatus(prev => ({ ...prev, transcribe: "success" }));
+      // Update step status and move to the next step
+      updateStepStatus("transcribe", "success", true);
       
       // --- STEP 4: Move to Summarize (or next steps) ---
       setPipelineStep(4);
@@ -593,7 +581,7 @@ const App: React.FC = () => {
       return true;
     } catch (err) {
       appendLog("Error during transcription step: " + err, "error");
-      setStepStatus(prev => ({ ...prev, transcribe: "error" }));
+      updateStepStatus("transcribe", "error");
       // Make sure to reset transcribing state on error too
       setTranscribing(false);
       return false;
@@ -830,32 +818,54 @@ const App: React.FC = () => {
   };
 
   // -----------------------------------------------------------------
-  // Copy, Download, Clear Transcription
+  // Generic Copy and Download Functions
   // -----------------------------------------------------------------
-  const handleCopyTranscription = (textToCopy?: string | React.MouseEvent) => {
-    // If it's a MouseEvent, ignore it and use transcriptionResult
-    const text = typeof textToCopy === 'string' ? textToCopy : transcriptionResult;
+  const copyTextToClipboard = (text: string, successMessage: string = "Copied to clipboard!") => {
     if (!text) return;
     navigator.clipboard.writeText(text).then(
       () => {
-        appendLog("Transcription copied to clipboard.", "info");
+        appendLog(successMessage, "info");
         toast.success("Copied to clipboard!", {
-           autoClose: 3000,
-           style: { backgroundColor: "#fff", color: "#000" }
+          autoClose: 3000,
+          style: { backgroundColor: "#fff", color: "#000" }
         });
       },
       (err) => {
-        appendLog("Error copying transcription: " + err, "error");
+        appendLog(`Error copying text: ${err}`, "error");
       }
     );
   };
 
-  const handleDownloadTranscription = () => {
-    if (!transcriptionResult) return;
-    const blob = new Blob([transcriptionResult], { type: "text/plain" });
+  const downloadTextAsFile = (text: string, fileName: string, successMessage: string = "Downloaded successfully!") => {
+    if (!text) return;
+    const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-  
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    appendLog(successMessage, "info");
+    toast.success("Download initiated!", { 
+      autoClose: 3000, 
+      style: { backgroundColor: "#fff", color: "#000" } 
+    });
+  };
+
+  // -----------------------------------------------------------------
+  // Copy, Download, Clear Transcription - Refactored to use generic functions
+  // -----------------------------------------------------------------
+  const handleCopyTranscription = (textToCopy?: string | React.MouseEvent) => {
+    // If it's a MouseEvent, ignore it and use transcriptionResult
+    const text = typeof textToCopy === 'string' ? textToCopy : transcriptionResult;
+    copyTextToClipboard(text, "Transcription copied to clipboard.");
+  };
+
+  const handleDownloadTranscription = () => {
+    if (!transcriptionResult) return;
+    
     // Determine the base name from the input file (if available)
     let baseName = "transcription";
     if (inputFile) {
@@ -867,43 +877,19 @@ const App: React.FC = () => {
         baseName = inputFile.name;
       }
     }
-  
-    link.href = url;
-    link.download = `${baseName}-transcript.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    appendLog("Transcription downloaded as TXT.", "info");
-    toast.success("Download initiated!", { 
-       autoClose: 3000, 
-       style: { backgroundColor: "#fff", color: "#000" } 
-    });
+    
+    downloadTextAsFile(transcriptionResult, `${baseName}-transcript.txt`, "Transcription downloaded as TXT.");
   };
-  
+
   // New handler for copying LLM Output
   const handleCopyLLMOutput = () => {
-    if (!chatCompletionResult) return;
-    navigator.clipboard.writeText(chatCompletionResult).then(
-      () => {
-        appendLog("LLM Output copied to clipboard.", "info");
-        toast.success("Copied to clipboard!", { 
-          autoClose: 3000, 
-          style: { backgroundColor: "#fff", color: "#000" } 
-        });
-      },
-      (err) => {
-        appendLog("Error copying LLM Output: " + err, "error");
-      }
-    );
+    copyTextToClipboard(chatCompletionResult, "LLM Output copied to clipboard.");
   };
 
   // New handler for downloading LLM Output
   const handleDownloadLLMOutput = () => {
     if (!chatCompletionResult) return;
-    const blob = new Blob([chatCompletionResult], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+    
     // Determine the base name from the original input file (if available)
     let baseName = "llm-output";
     if (inputFile) {
@@ -914,20 +900,10 @@ const App: React.FC = () => {
         baseName = inputFile.name;
       }
     }
-    link.href = url;
-    link.download = `${baseName}-llm output.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    appendLog("LLM Output downloaded as TXT.", "info");
-    toast.success("Download initiated!", { 
-      autoClose: 3000, 
-      style: { backgroundColor: "#fff", color: "#000" } 
-    });
+    
+    downloadTextAsFile(chatCompletionResult, `${baseName}-llm output.txt`, "LLM Output downloaded as TXT.");
   };
 
-  
   // -----------------------------------------------------------------
   // LLM: Summarize (Step 4)
   // -----------------------------------------------------------------
@@ -947,12 +923,12 @@ const App: React.FC = () => {
     setPipelineStep(4);
     setIsGeneratingChat(true);
     setChatCompletionResult("");
-    setStepStatus(prev => ({ ...prev, summarize: "loading" }));
+    updateStepStatus("summarize", "loading");
 
     if (selectedApi === "openai") {
       if (!openaiKey) {
         appendLog("ERROR: OpenAI key not set. Please provide a valid key.", "error");
-        setStepStatus(prev => ({ ...prev, summarize: "error" }));
+        updateStepStatus("summarize", "error");
         setIsGeneratingChat(false);
         return;
       }
@@ -979,10 +955,10 @@ const App: React.FC = () => {
         const output = response.choices?.[0]?.message?.content || "";
         setChatCompletionResult(output);
         appendLog("Received response from OpenAI Chat (Step 4).", "info");
-        setStepStatus(prev => ({ ...prev, summarize: "success" }));
+        updateStepStatus("summarize", "success");
       } catch (err: any) {
         appendLog("Error calling OpenAI Chat: " + (err.message || String(err)), "error");
-        setStepStatus(prev => ({ ...prev, summarize: "error" }));
+        updateStepStatus("summarize", "error");
       } finally {
         setIsGeneratingChat(false);
       }
@@ -990,7 +966,7 @@ const App: React.FC = () => {
       // GROQ
       if (!groqKey) {
         appendLog("ERROR: Groq key not set. Please provide a valid key.", "error");
-        setStepStatus(prev => ({ ...prev, summarize: "error" }));
+        updateStepStatus("summarize", "error");
         setIsGeneratingChat(false);
         return;
       }
@@ -1095,7 +1071,7 @@ const App: React.FC = () => {
           await runSplittingStep(intermediateData.convertedMp3);
         } else {
           appendLog("Cannot resume splitting: no converted MP3 data available.", "error");
-          setStepStatus(prev => ({ ...prev, split: "error" }));
+          updateStepStatus("split", "error");
         }
         break;
       case "transcribe":
@@ -1104,7 +1080,7 @@ const App: React.FC = () => {
           await runTranscriptionStep(intermediateData.segments);
         } else {
           appendLog("Cannot resume transcription: no segments available.", "error");
-          setStepStatus(prev => ({ ...prev, transcribe: "error" }));
+          updateStepStatus("transcribe", "error");
         }
         break;
       case "summarize":
@@ -1113,7 +1089,7 @@ const App: React.FC = () => {
           handleSendToLLM();
         } else {
           appendLog("Cannot start summarization: no transcription available.", "error");
-          setStepStatus(prev => ({ ...prev, summarize: "error" }));
+          updateStepStatus("summarize", "error");
         }
         break;
     }
@@ -1164,58 +1140,112 @@ const App: React.FC = () => {
   }, []);
 
   // -----------------------------------------------------------------
+  // Base Cleanup Function - Reused by other cleanup functions
+  // -----------------------------------------------------------------
+  const performBaseCleanup = async (
+    ffmpeg: FFmpeg,
+    options: {
+      unmountFS?: boolean;
+      removeFiles?: boolean;
+      terminateFFmpeg?: boolean;
+      createNewInstance?: boolean;
+      logPrefix?: string;
+    } = {}
+  ): Promise<{ success: boolean; newFFmpeg?: FFmpeg }> => {
+    const {
+      unmountFS = true,
+      removeFiles = true,
+      terminateFFmpeg = true,
+      createNewInstance = true,
+      logPrefix = "Cleanup"
+    } = options;
+    
+    let success = true;
+    const mountDir = "/mounted";
+    
+    // Step 1: Unmount the file system
+    if (unmountFS) {
+      try {
+        appendLog(`${logPrefix}: Unmounting file system...`, "info");
+        try {
+          await ffmpeg.unmount(mountDir);
+          appendLog(`✓ Unmounted WORKERFS at /mounted.`, "info");
+        } catch (unmountErr) {
+          // Ignore error if nothing is mounted
+          appendLog("No file system was mounted or already unmounted.", "info");
+        }
+      } catch (err) {
+        appendLog(`Error unmounting file system: ${err}`, "error");
+        success = false;
+      }
+    }
+
+    // Step 2: Delete temporary files
+    if (removeFiles) {
+      try {
+        appendLog(`${logPrefix}: Removing temporary files...`, "info");
+        try {
+          ffmpeg.deleteFile("output.mp3");
+          appendLog("✓ Temporary files removed.", "info");
+        } catch (unlinkErr) {
+          // Ignore error if file doesn't exist
+          appendLog("No temporary files to remove.", "info");
+        }
+      } catch (err) {
+        appendLog(`Error removing temporary files: ${err}`, "error");
+        success = false;
+      }
+    }
+
+    // Step 3: Terminate FFmpeg instance
+    if (terminateFFmpeg) {
+      try {
+        appendLog(`${logPrefix}: Terminating FFmpeg instance...`, "info");
+        ffmpeg.terminate();
+        appendLog("✓ FFmpeg instance terminated.", "info");
+      } catch (termErr) {
+        appendLog(`Error terminating FFmpeg: ${termErr}`, "error");
+        success = false;
+      }
+    }
+
+    // Step 4: Create a fresh FFmpeg instance
+    let newFFmpeg: FFmpeg | undefined;
+    if (createNewInstance) {
+      try {
+        appendLog(`${logPrefix}: Creating fresh FFmpeg instance...`, "info");
+        newFFmpeg = await createNewFFmpeg();
+        appendLog("✓ New FFmpeg instance is ready for use.", "info");
+      } catch (newInstErr) {
+        appendLog(`Error creating new FFmpeg instance: ${newInstErr}`, "error");
+        success = false;
+      }
+    }
+    
+    return { success, newFFmpeg };
+  };
+
+  // -----------------------------------------------------------------
   // Automatic Cleanup Function - For successful transcription
   // -----------------------------------------------------------------
   const performAutoCleanup = async (): Promise<boolean> => {
     appendLog("Starting automatic cleanup after successful transcription...", "info");
-    let cleanupSuccessful = true;
     
     try {
       const ffmpeg = ffmpegRef.current;
-      const mountDir = "/mounted";
       
-      // Step 1: Unmount the file system
-      try {
-        appendLog("Auto-cleanup step 1/5: Unmounting file system...", "info");
-        await ffmpeg.unmount(mountDir);
-        appendLog("✓ Unmounted WORKERFS at /mounted.", "info");
-      } catch (unmountErr) {
-        appendLog("✗ Error unmounting WORKERFS: " + unmountErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 2: Delete temporary files
-      try {
-        appendLog("Auto-cleanup step 2/5: Removing temporary files...", "info");
-        ffmpeg.deleteFile("output.mp3");
-        appendLog("✓ Temporary files removed.", "info");
-      } catch (unlinkErr) {
-        appendLog("✗ Error deleting files: " + unlinkErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 3: Terminate FFmpeg instance
-      try {
-        appendLog("Auto-cleanup step 3/5: Terminating FFmpeg instance...", "info");
-        ffmpeg.terminate();
-        appendLog("✓ FFmpeg instance terminated. All worker data cleared.", "info");
-      } catch (termErr) {
-        appendLog("✗ Error terminating FFmpeg: " + termErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 4: Create a fresh FFmpeg instance
-      try {
-        appendLog("Auto-cleanup step 4/5: Creating fresh FFmpeg instance...", "info");
-        ffmpegRef.current = await createNewFFmpeg();
+      // Perform base cleanup with all options enabled
+      const { success: cleanupSuccess, newFFmpeg } = await performBaseCleanup(ffmpeg, {
+        logPrefix: "Auto-cleanup"
+      });
+      
+      if (newFFmpeg) {
+        ffmpegRef.current = newFFmpeg;
         setLoaded(true);
-        appendLog("✓ New FFmpeg instance is ready for use.", "info");
-      } catch (newInstErr) {
-        appendLog("✗ Error creating new FFmpeg instance: " + newInstErr, "error");
-        cleanupSuccessful = false;
       }
       
-      // Step 5: Reset progress bar display
+      // Additional step: Reset progress display
+      let finalSuccess = cleanupSuccess;
       try {
         appendLog("Auto-cleanup step 5/5: Resetting progress display...", "info");
         
@@ -1232,16 +1262,16 @@ const App: React.FC = () => {
         appendLog("✓ Progress display reset successfully.", "info");
       } catch (resetErr) {
         appendLog("✗ Error resetting progress display: " + resetErr, "error");
-        cleanupSuccessful = false;
+        finalSuccess = false;
       }
       
-      if (cleanupSuccessful) {
+      if (finalSuccess) {
         appendLog("Automatic cleanup process completed successfully! ✓", "info");
       } else {
         appendLog("Automatic cleanup process completed with some errors. Check log for details.", "error");
       }
       
-      return cleanupSuccessful;
+      return finalSuccess;
     } catch (err) {
       appendLog("Unexpected error during automatic cleanup: " + err, "error");
       return false;
@@ -1253,54 +1283,22 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const performCleanup = async () => {
     appendLog("Starting manual cleanup process...", "info");
-    let cleanupSuccessful = true;
     
     try {
       const ffmpeg = ffmpegRef.current;
-      const mountDir = "/mounted";
       
-      // Step 1: Unmount the file system
-      try {
-        appendLog("Cleanup step 1/5: Unmounting file system...", "info");
-        await ffmpeg.unmount(mountDir);
-        appendLog("✓ Unmounted WORKERFS at /mounted.", "info");
-      } catch (unmountErr) {
-        appendLog("✗ Error unmounting WORKERFS: " + unmountErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 2: Delete temporary files
-      try {
-        appendLog("Cleanup step 2/5: Removing temporary files...", "info");
-        ffmpeg.deleteFile("output.mp3");
-        appendLog("✓ Temporary files removed.", "info");
-      } catch (unlinkErr) {
-        appendLog("✗ Error deleting files: " + unlinkErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 3: Terminate FFmpeg instance
-      try {
-        appendLog("Cleanup step 3/5: Terminating FFmpeg instance...", "info");
-        ffmpeg.terminate();
-        appendLog("✓ FFmpeg instance terminated. All worker data cleared.", "info");
-      } catch (termErr) {
-        appendLog("✗ Error terminating FFmpeg: " + termErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 4: Create a fresh FFmpeg instance
-      try {
-        appendLog("Cleanup step 4/5: Creating fresh FFmpeg instance...", "info");
-        ffmpegRef.current = await createNewFFmpeg();
+      // Perform base cleanup with all options enabled
+      const { success: cleanupSuccess, newFFmpeg } = await performBaseCleanup(ffmpeg, {
+        logPrefix: "Cleanup"
+      });
+      
+      if (newFFmpeg) {
+        ffmpegRef.current = newFFmpeg;
         setLoaded(true);
-        appendLog("✓ New FFmpeg instance is ready for use.", "info");
-      } catch (newInstErr) {
-        appendLog("✗ Error creating new FFmpeg instance: " + newInstErr, "error");
-        cleanupSuccessful = false;
       }
       
-      // Step 5: Reset application state
+      // Additional step: Reset application state
+      let finalSuccess = cleanupSuccess;
       try {
         appendLog("Cleanup step 5/5: Resetting application state...", "info");
         
@@ -1334,10 +1332,10 @@ const App: React.FC = () => {
         appendLog("✓ Application state reset successfully.", "info");
       } catch (resetErr) {
         appendLog("✗ Error resetting application state: " + resetErr, "error");
-        cleanupSuccessful = false;
+        finalSuccess = false;
       }
       
-      if (cleanupSuccessful) {
+      if (finalSuccess) {
         appendLog("Manual cleanup process completed successfully! Application reset. ✓", "info");
         toast.success("Cleanup completed and application reset");
       } else {
@@ -1345,7 +1343,7 @@ const App: React.FC = () => {
         toast.warning("Cleanup completed with some issues");
       }
       
-      return cleanupSuccessful;
+      return finalSuccess;
     } catch (err) {
       appendLog("Unexpected error during manual cleanup: " + err, "error");
       toast.error("Cleanup failed");
@@ -1358,64 +1356,22 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const performLightCleanup = async (): Promise<boolean> => {
     appendLog("Starting light cleanup of previous transcription resources...", "info");
-    let cleanupSuccessful = true;
     
     try {
       const ffmpeg = ffmpegRef.current;
-      const mountDir = "/mounted";
       
-      // Step 1: Unmount the file system if needed
-      try {
-        appendLog("Light cleanup: Unmounting any previous file system...", "info");
-        try {
-          await ffmpeg.unmount(mountDir);
-          appendLog("✓ Unmounted WORKERFS at /mounted.", "info");
-        } catch (unmountErr) {
-          // Ignore error if nothing is mounted
-          appendLog("No file system was mounted or already unmounted.", "info");
-        }
-      } catch (err) {
-        appendLog("Error unmounting file system: " + err, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 2: Delete temporary files
-      try {
-        appendLog("Light cleanup: Removing temporary files...", "info");
-        try {
-          ffmpeg.deleteFile("output.mp3");
-          appendLog("✓ Temporary files removed.", "info");
-        } catch (unlinkErr) {
-          // Ignore error if file doesn't exist
-          appendLog("No temporary files to remove.", "info");
-        }
-      } catch (err) {
-        appendLog("Error removing temporary files: " + err, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 3: Terminate FFmpeg instance
-      try {
-        appendLog("Light cleanup: Terminating FFmpeg instance...", "info");
-        ffmpeg.terminate();
-        appendLog("✓ FFmpeg instance terminated.", "info");
-      } catch (termErr) {
-        appendLog("Error terminating FFmpeg: " + termErr, "error");
-        cleanupSuccessful = false;
-      }
-
-      // Step 4: Create a fresh FFmpeg instance
-      try {
-        appendLog("Light cleanup: Creating fresh FFmpeg instance...", "info");
-        ffmpegRef.current = await createNewFFmpeg();
+      // Perform base cleanup with all options enabled
+      const { success: cleanupSuccess, newFFmpeg } = await performBaseCleanup(ffmpeg, {
+        logPrefix: "Light cleanup"
+      });
+      
+      if (newFFmpeg) {
+        ffmpegRef.current = newFFmpeg;
         setLoaded(true);
-        appendLog("✓ New FFmpeg instance is ready for use.", "info");
-      } catch (newInstErr) {
-        appendLog("Error creating new FFmpeg instance: " + newInstErr, "error");
-        cleanupSuccessful = false;
       }
       
-      // Step 5: Reset progress bar and step statuses
+      // Additional step: Reset progress display
+      let finalSuccess = cleanupSuccess;
       try {
         appendLog("Light cleanup: Resetting progress display...", "info");
         // Reset pipeline step to setup completed (ready for conversion)
@@ -1433,16 +1389,16 @@ const App: React.FC = () => {
         appendLog("✓ Progress display reset successfully.", "info");
       } catch (resetErr) {
         appendLog("Error resetting progress display: " + resetErr, "error");
-        cleanupSuccessful = false;
+        finalSuccess = false;
       }
       
-      if (cleanupSuccessful) {
+      if (finalSuccess) {
         appendLog("Light cleanup completed successfully!", "info");
       } else {
         appendLog("Light cleanup completed with some issues, but we'll continue.", "error");
       }
       
-      return cleanupSuccessful;
+      return finalSuccess;
     } catch (err) {
       appendLog("Unexpected error during light cleanup: " + err, "error");
       return false;
@@ -1454,6 +1410,26 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const isAnyStepLoading = (): boolean => {
     return Object.values(stepStatus).some(status => status === "loading");
+  };
+
+  // -----------------------------------------------------------------
+  // UTILITY: Update step status and pipeline step
+  // -----------------------------------------------------------------
+  const updateStepStatus = (step: StepName, status: StepStatus, moveToNextStep: boolean = false) => {
+    setStepStatus(prev => ({ ...prev, [step]: status }));
+    
+    // If success and moveToNextStep is true, move to the next pipeline step
+    if (status === "success" && moveToNextStep) {
+      const currentStepIndex = stepIndexMap[step];
+      // Find the next step name by index
+      const nextStepIndex = currentStepIndex + 1;
+      const maxStepIndex = Math.max(...Object.values(stepIndexMap));
+      
+      // Only proceed if we're not already at the last step
+      if (nextStepIndex <= maxStepIndex) {
+        setPipelineStep(nextStepIndex);
+      }
+    }
   };
 
   // -----------------------------------------------------------------
