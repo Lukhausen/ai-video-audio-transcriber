@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useImperativeHandle, forwardRef } from 'react';
+import { useState, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 
 interface CollapsibleLLMOutputProps {
