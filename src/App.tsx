@@ -19,6 +19,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { AudioRecorder } from "react-audio-voice-recorder";
 
 import { usePromptGallery } from './hooks/usePromptGallery';
+import CollapsibleLLMOutput, { CollapsibleLLMOutputRef } from "./components/CollapsibleLLMOutput";
 
 interface SegmentInfo {
   filename: string;
@@ -143,6 +144,9 @@ const App: React.FC = () => {
 
   // Add a new state to track if the file is from recording
   const [isFromRecording, setIsFromRecording] = useState<boolean>(false);
+
+  // Add ref for the CollapsibleLLMOutput component
+  const llmOutputRef = useRef<CollapsibleLLMOutputRef>(null);
 
   // -----------------------------------------------------------------
   // HELPER: Append log message
@@ -822,7 +826,11 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const copyTextToClipboard = (text: string, successMessage: string = "Copied to clipboard!") => {
     if (!text) return;
-    navigator.clipboard.writeText(text).then(
+    
+    // Trim whitespace from beginning and end of text
+    const trimmedText = text.trim();
+    
+    navigator.clipboard.writeText(trimmedText).then(
       () => {
         appendLog(successMessage, "info");
         toast.success("Copied to clipboard!", {
@@ -838,7 +846,11 @@ const App: React.FC = () => {
 
   const downloadTextAsFile = (text: string, fileName: string, successMessage: string = "Downloaded successfully!") => {
     if (!text) return;
-    const blob = new Blob([text], { type: "text/plain" });
+    
+    // Trim whitespace from beginning and end of text
+    const trimmedText = text.trim();
+    
+    const blob = new Blob([trimmedText], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -881,14 +893,19 @@ const App: React.FC = () => {
     downloadTextAsFile(transcriptionResult, `${baseName}-transcript.txt`, "Transcription downloaded as TXT.");
   };
 
-  // New handler for copying LLM Output
+  // Updated handler for copying LLM Output
   const handleCopyLLMOutput = () => {
-    copyTextToClipboard(chatCompletionResult, "LLM Output copied to clipboard.");
+    // Get filtered content (excludes collapsed thinking sections)
+    const filteredContent = llmOutputRef.current?.getFilteredContent() || chatCompletionResult;
+    copyTextToClipboard(filteredContent, "LLM Output copied to clipboard.");
   };
 
-  // New handler for downloading LLM Output
+  // Updated handler for downloading LLM Output
   const handleDownloadLLMOutput = () => {
     if (!chatCompletionResult) return;
+    
+    // Get filtered content (excludes collapsed thinking sections)
+    const filteredContent = llmOutputRef.current?.getFilteredContent() || chatCompletionResult;
     
     // Determine the base name from the original input file (if available)
     let baseName = "llm-output";
@@ -901,7 +918,7 @@ const App: React.FC = () => {
       }
     }
     
-    downloadTextAsFile(chatCompletionResult, `${baseName}-llm output.txt`, "LLM Output downloaded as TXT.");
+    downloadTextAsFile(filteredContent, `${baseName}-llm output.txt`, "LLM Output downloaded as TXT.");
   };
 
   // -----------------------------------------------------------------
@@ -1787,15 +1804,25 @@ const App: React.FC = () => {
             <div className="transcript-header">
               <h3>LLM Output</h3>
               <div>
-                <button className="transcript-icon" onClick={handleCopyLLMOutput}>
+                <button 
+                  className="transcript-icon" 
+                  onClick={handleCopyLLMOutput}
+                  title="Copy LLM output (collapsed thinking sections will be excluded)"
+                >
                   <FaCopy />
                 </button>
-                <button className="transcript-icon" onClick={handleDownloadLLMOutput}>
+                <button 
+                  className="transcript-icon" 
+                  onClick={handleDownloadLLMOutput}
+                  title="Download LLM output (collapsed thinking sections will be excluded)"
+                >
                   <FaFileDownload />
                 </button>
               </div>
             </div>
-            <pre className="transcript-output">{chatCompletionResult}</pre>
+            <div className="transcript-output">
+              <CollapsibleLLMOutput ref={llmOutputRef} content={chatCompletionResult} />
+            </div>
           </div>
         )}
 

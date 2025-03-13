@@ -165,15 +165,21 @@ body {
   border: 1px solid #444;
   border-radius: 4px;
   padding: 1rem;
-  height: 200px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-wrap: break-word;
   color: #cfcfcf;
 }
 
+/* Add specific style for LLM output container */
+.transcript-section:has(.collapsible-llm-output) .transcript-output {
+  height: auto;
+  max-height: none;
+}
+
 .transcript-editable {
   width: 100%;
+  height: 200px; /* Keep fixed height for editable transcript */
   resize: vertical;
   font-family: inherit;
   font-size: 1rem;
@@ -634,4 +640,61 @@ footer a:hover {
   font-size: 0.8rem;
   margin: -0.5rem 0 0 0;
   opacity: 0.7;
+}
+
+/* CollapsibleLLMOutput Component */
+.collapsible-llm-output {
+  width: 100%;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.collapsible-llm-output pre {
+  margin: 0;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.thinking-section {
+  margin: 8px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background-color: rgba(0, 0, 0, 0.03);
+  user-select: none;
+}
+
+.thinking-header:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.thinking-header span {
+  font-style: italic;
+}
+
+.thinking-content {
+  padding: 12px;
+  font-size: 0.95em;
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-tertiary);
+  border-top: 1px solid var(--color-border);
+  overflow-y: visible;
+  max-height: none;
+}
+
+.regular-content {
+  margin-bottom: 8px;
 }
