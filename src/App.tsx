@@ -168,13 +168,14 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const createNewFFmpeg = async (): Promise<FFmpeg> => {
     const newFFmpeg = new FFmpeg();
-    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
     newFFmpeg.on("log", ({ message }) => {
       if (messageRef.current) messageRef.current.innerHTML = message;
       appendLog(`FFmpeg: ${message}`, "info");
     });
     await newFFmpeg.load({
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      coreURL: `${window.location.origin}/ffmpeg/ffmpeg-core.js`,
+      wasmURL: `${window.location.origin}/ffmpeg/ffmpeg-core.wasm`,
+      workerURL: `${window.location.origin}/ffmpeg/worker.js`
     });
     appendLog("New FFmpeg instance loaded.", "info");
     return newFFmpeg;
@@ -188,14 +189,15 @@ const App: React.FC = () => {
     appendLog("Loading ffmpeg-core (Step 0) ...", "info");
     
     try {
-      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
       const ffmpeg = ffmpegRef.current;
       ffmpeg.on("log", ({ message }) => {
         if (messageRef.current) messageRef.current.innerHTML = message;
         appendLog(`FFmpeg: ${message}`, "info");
       });
       await ffmpeg.load({
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        coreURL: `${window.location.origin}/ffmpeg/ffmpeg-core.js`,
+        wasmURL: `${window.location.origin}/ffmpeg/ffmpeg-core.wasm`,
+        workerURL: `${window.location.origin}/ffmpeg/worker.js`
       });
       setLoaded(true);
       appendLog("FFmpeg loaded successfully.", "info");
