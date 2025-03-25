@@ -1,7 +1,6 @@
 // App.tsx
 import React, { useState, useRef, useEffect } from "react";
 import { FFmpeg, FFFSType } from "@ffmpeg/ffmpeg";
-import { toBlobURL } from "@ffmpeg/util";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
 
