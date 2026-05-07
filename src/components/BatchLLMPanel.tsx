@@ -7,6 +7,7 @@ import OpenAI from 'openai';
 import { Tag } from 'antd';
 import CollapsibleLLMOutput, { CollapsibleLLMOutputRef } from './CollapsibleLLMOutput';
 import { usePromptGallery } from '../hooks/usePromptGallery';
+import { GROQ_CHAT_MODELS, OPENAI_CHAT_MODELS } from '../modelOptions';
 import type { FileJob, ApiConfig } from '../types';
 
 interface BatchLLMPanelProps {
@@ -17,6 +18,8 @@ interface BatchLLMPanelProps {
   openaiKey: string;
   openAiChatModel: string;
   groqChatModel: string;
+  onOpenAiChatModelChange: (model: string) => void;
+  onGroqChatModelChange: (model: string) => void;
   onLog: (msg: string, type: 'info' | 'error') => void;
   onSetLLMResult: (id: string, result: string) => void;
   onCopy: (text: string) => void;
@@ -30,6 +33,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   openaiKey,
   openAiChatModel,
   groqChatModel,
+  onOpenAiChatModelChange,
+  onGroqChatModelChange,
   onLog,
   onSetLLMResult,
   onCopy,
@@ -80,9 +85,10 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   const handleProcess = async () => {
     if (completedJobs.length === 0) return;
 
-    // Save custom prompt
-    if (systemPrompt.trim()) {
-      addCustomPrompt(systemPrompt);
+    const instruction = systemPrompt.trim();
+    if (instruction) {
+      addCustomPrompt(instruction);
+      updatePromptUsage(instruction);
     }
 
     setIsGenerating(true);
@@ -90,13 +96,13 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
     try {
       if (mode === 'per-file') {
         for (const job of completedJobs) {
-          onLog(`[LLM] Processing "${job.fileName}"...`, 'info');
+          onLog(`[AI] Processing "${job.fileName}"...`, 'info');
           try {
             const result = await callLLM(job.transcript!);
             onSetLLMResult(job.id, result);
-            onLog(`[LLM] ✓ "${job.fileName}" done.`, 'info');
+            onLog(`[AI] "${job.fileName}" done.`, 'info');
           } catch (err: any) {
-            onLog(`[LLM] Error on "${job.fileName}": ${err.message}`, 'error');
+            onLog(`[AI] Error on "${job.fileName}": ${err.message}`, 'error');
           }
         }
       } else {
@@ -104,13 +110,13 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
         const combined = completedJobs
           .map(j => `=== ${j.fileName} ===\n\n${j.transcript}`)
           .join('\n\n---\n\n');
-        onLog('[LLM] Processing combined transcript...', 'info');
+        onLog('[AI] Processing combined transcript...', 'info');
         const result = await callLLM(combined);
         setCombinedResult(result);
-        onLog('[LLM] ✓ Combined processing done.', 'info');
+        onLog('[AI] Combined processing done.', 'info');
       }
     } catch (err: any) {
-      onLog(`[LLM] Error: ${err.message}`, 'error');
+      onLog(`[AI] Error: ${err.message}`, 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -122,18 +128,42 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
     <div className="llm-panel">
       <div className="llm-panel-header">
         <div className="llm-panel-title">
-          <h3>LLM Post-Processing</h3>
+          <h3>AI actions</h3>
         </div>
         <div className="llm-panel-controls">
           <div className="model-selector">
-            <label>Mode:</label>
+            <label>AI model:</label>
+            {selectedApi === 'openai' ? (
+              <select
+                className="input-standard"
+                value={openAiChatModel}
+                onChange={e => onOpenAiChatModelChange(e.target.value)}
+              >
+                {OPENAI_CHAT_MODELS.map(model => (
+                  <option key={model.value} value={model.value}>{model.label}</option>
+                ))}
+              </select>
+            ) : (
+              <select
+                className="input-standard"
+                value={groqChatModel}
+                onChange={e => onGroqChatModelChange(e.target.value)}
+              >
+                {GROQ_CHAT_MODELS.map(model => (
+                  <option key={model.value} value={model.value}>{model.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="model-selector">
+            <label>Apply to:</label>
             <select
               className="input-standard"
               value={mode}
               onChange={e => setMode(e.target.value as 'per-file' | 'combined')}
             >
-              <option value="per-file">Per-file ({completedJobs.length} files)</option>
-              <option value="combined">Combined</option>
+              <option value="per-file">Each transcript ({completedJobs.length})</option>
+              <option value="combined">Combined transcript</option>
             </select>
           </div>
         </div>
@@ -141,16 +171,20 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
 
       {/* Prompt Gallery */}
       <div className="prompt-gallery-section">
-        <label className="section-label">Prompt Gallery</label>
+        <label className="section-label">Saved instructions</label>
         <div className="prompt-gallery">
-          {prompts.map((prompt, idx) => (
+          {prompts.map(prompt => (
             <Tag
-              key={idx}
+              key={prompt.text}
               closable={prompt.custom}
-              onClose={prompt.custom ? () => removeCustomPrompt(idx) : undefined}
+              onClose={prompt.custom ? event => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeCustomPrompt(prompt.text);
+              } : undefined}
               onClick={() => {
                 setSystemPrompt(prompt.text);
-                updatePromptUsage(idx);
+                updatePromptUsage(prompt.text);
               }}
               className="prompt-tag"
             >
@@ -162,12 +196,12 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
 
       {/* System Prompt */}
       <div className="system-prompt-section">
-        <label className="section-label">System Prompt</label>
+        <label className="section-label">Instruction</label>
         <textarea
           className="system-prompt-input"
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
-          placeholder="Enter system instructions for the LLM..."
+          placeholder="Summarize into bullet points and list action items."
         />
         <button
           className="btn-standard"
@@ -175,9 +209,11 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
           disabled={isGenerating}
         >
           {isGenerating ? (
-            <><LoadingOutlined /> Processing...</>
+            <><LoadingOutlined /> Running AI...</>
           ) : (
-            `Process with ${selectedApi} (${mode === 'per-file' ? `${completedJobs.length} files` : 'combined'})`
+            mode === 'per-file'
+              ? `Run AI on ${completedJobs.length} transcript${completedJobs.length === 1 ? '' : 's'}`
+              : 'Run AI on combined transcript'
           )}
         </button>
       </div>
@@ -188,9 +224,9 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
           {completedJobs.filter(j => j.llmResult).map(job => (
             <div key={job.id} className="transcript-section" style={{ marginTop: '1rem' }}>
               <div className="transcript-header">
-                <h3>LLM Output — {job.fileName}</h3>
+                <h3>AI result - {job.fileName}</h3>
                 <div>
-                  <button className="transcript-icon" onClick={() => onCopy(job.llmResult!)} title="Copy">
+                  <button className="transcript-icon" onClick={() => onCopy(job.llmResult!)} title="Copy AI result to clipboard" aria-label={`Copy AI result for ${job.fileName}`}>
                     <FaCopy />
                   </button>
                   <button
@@ -199,7 +235,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
                       const baseName = job.fileName.replace(/\.[^.]+$/, '');
                       onDownload(job.llmResult!, `${baseName}-llm-output.txt`);
                     }}
-                    title="Download"
+                    title="Download AI result as a text file"
+                    aria-label={`Download AI result for ${job.fileName}`}
                   >
                     <FaFileDownload />
                   </button>
@@ -217,7 +254,7 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
       {mode === 'combined' && combinedResult && (
         <div className="transcript-section" style={{ marginTop: '1rem' }}>
           <div className="transcript-header">
-            <h3>LLM Output — Combined</h3>
+            <h3>AI result - combined transcripts</h3>
             <div>
               <button
                 className="transcript-icon"
@@ -225,7 +262,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
                   const filtered = llmOutputRef.current?.getFilteredContent() || combinedResult;
                   onCopy(filtered);
                 }}
-                title="Copy"
+                title="Copy combined AI result to clipboard"
+                aria-label="Copy combined AI result to clipboard"
               >
                 <FaCopy />
               </button>
@@ -235,7 +273,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
                   const filtered = llmOutputRef.current?.getFilteredContent() || combinedResult;
                   onDownload(filtered, 'combined-llm-output.txt');
                 }}
-                title="Download"
+                title="Download combined AI result as a text file"
+                aria-label="Download combined AI result as a text file"
               >
                 <FaFileDownload />
               </button>

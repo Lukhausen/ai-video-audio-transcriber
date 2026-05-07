@@ -6,6 +6,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
+  FileTextOutlined,
   ReloadOutlined,
   DownOutlined,
   RightOutlined,
@@ -17,6 +18,7 @@ import type { FileJob } from '../types';
 interface FileJobRowProps {
   job: FileJob;
   onRemove: (id: string) => void;
+  onStart: (id: string) => void;
   onRetry: (id: string) => void;
   onUpdateTranscript: (id: string, text: string) => void;
   onCopy: (text: string) => void;
@@ -40,9 +42,14 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function countWords(text?: string): number {
+  return text?.trim().split(/\s+/).filter(Boolean).length || 0;
+}
+
 const FileJobRow: React.FC<FileJobRowProps> = ({
   job,
   onRemove,
+  onStart,
   onRetry,
   onUpdateTranscript,
   onCopy,
@@ -54,6 +61,7 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
   const canRemove = job.status === 'queued' || job.status === 'done' || job.status === 'error';
   const isVideo = job.mimeType.startsWith('video/');
   const transcriptPreview = job.transcript?.trim();
+  const wordCount = countWords(job.transcript);
 
   return (
     <div className={`job-row ${expanded ? 'job-row-expanded' : ''}`}>
@@ -68,6 +76,9 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
             <span className="job-row-file-heading">
               <span className="job-row-name" title={job.fileName}>{job.fileName}</span>
               <span className="job-row-size">{formatSize(job.fileSize)}</span>
+              {wordCount > 0 && (
+                <span className="job-row-size">{wordCount.toLocaleString()} words</span>
+              )}
             </span>
             {transcriptPreview && (
               <span className="job-row-preview" title={transcriptPreview}>
@@ -107,9 +118,24 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
 
         {/* Actions */}
         <div className="job-row-actions" onClick={e => e.stopPropagation()}>
+          {job.status === 'queued' && (
+            <button
+              className="transcript-icon"
+              onClick={() => onStart(job.id)}
+              title="Transcribe this file"
+              aria-label={`Transcribe ${job.fileName}`}
+            >
+              <FileTextOutlined />
+            </button>
+          )}
           {job.transcript && (
             <>
-              <button className="transcript-icon" onClick={() => onCopy(job.transcript!)} title="Copy transcript">
+              <button
+                className="transcript-icon"
+                onClick={() => onCopy(job.transcript!)}
+                title="Copy this transcript to clipboard"
+                aria-label={`Copy transcript for ${job.fileName}`}
+              >
                 <FaCopy />
               </button>
               <button
@@ -118,24 +144,40 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
                   const baseName = job.fileName.replace(/\.[^.]+$/, '');
                   onDownload(job.transcript!, `${baseName}-transcript.txt`);
                 }}
-                title="Download transcript"
+                title="Download this transcript as a text file"
+                aria-label={`Download transcript for ${job.fileName}`}
               >
                 <FaFileDownload />
               </button>
             </>
           )}
           {job.status === 'error' && (
-            <button className="transcript-icon" onClick={() => onRetry(job.id)} title="Retry">
+            <button
+              className="transcript-icon"
+              onClick={() => onRetry(job.id)}
+              title="Retry transcription for this file"
+              aria-label={`Retry transcription for ${job.fileName}`}
+            >
               <ReloadOutlined />
             </button>
           )}
           {canRemove && (
-            <button className="transcript-icon transcript-icon-danger" onClick={() => onRemove(job.id)} title="Remove">
+            <button
+              className="transcript-icon transcript-icon-danger"
+              onClick={() => onRemove(job.id)}
+              title="Remove this file from the list"
+              aria-label={`Remove ${job.fileName} from the list`}
+            >
               <DeleteOutlined />
             </button>
           )}
           {job.transcript && (
-            <button className="transcript-icon expand-toggle" onClick={() => setExpanded(e => !e)}>
+            <button
+              className="transcript-icon expand-toggle"
+              onClick={() => setExpanded(e => !e)}
+              title={expanded ? "Hide full transcript editor" : "Show full transcript editor"}
+              aria-label={`${expanded ? 'Hide' : 'Show'} full transcript editor for ${job.fileName}`}
+            >
               {expanded ? <DownOutlined /> : <RightOutlined />}
             </button>
           )}

@@ -13,9 +13,11 @@ import type { FileJob } from '../types';
 interface FileJobTableProps {
   jobs: FileJob[];
   globalStatus: 'idle' | 'processing' | 'paused';
+  isTranscriptionReady: boolean;
   onStartAll: () => void;
   onPause: () => void;
   onResume: () => void;
+  onStartJob: (id: string) => void;
   onRemoveJob: (id: string) => void;
   onRetryJob: (id: string) => void;
   onUpdateTranscript: (id: string, text: string) => void;
@@ -27,9 +29,11 @@ interface FileJobTableProps {
 const FileJobTable: React.FC<FileJobTableProps> = ({
   jobs,
   globalStatus,
+  isTranscriptionReady,
   onStartAll,
   onPause,
   onResume,
+  onStartJob,
   onRemoveJob,
   onRetryJob,
   onUpdateTranscript,
@@ -76,12 +80,15 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
       {/* Batch action bar */}
       <div className="job-table-actions">
         <div className="job-table-stats">
-          <span>{completedJobs.length}/{jobs.length} complete</span>
+          <span>{completedJobs.length} of {jobs.length} files transcribed</span>
         </div>
         <div className="job-table-buttons">
           {hasQueued && !isProcessing && (
-            <button className="btn-standard" onClick={onStartAll}>
-              <PlayCircleOutlined /> Transcribe All
+            <button className="btn-standard" onClick={onStartAll} disabled={!isTranscriptionReady}>
+              <PlayCircleOutlined />
+              {isTranscriptionReady
+                ? 'Transcribe'
+                : 'Preparing...'}
             </button>
           )}
           {isProcessing && (
@@ -97,10 +104,10 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
           {hasCompleted && (
             <>
               <button className="btn-standard" onClick={handleDownloadAll}>
-                <FaFileDownload /> Download All
+                <FaFileDownload /> Download
               </button>
               <button className="btn-standard btn-danger" onClick={onClearCompleted}>
-                <ClearOutlined /> Clear Done
+                <ClearOutlined /> Clear done
               </button>
             </>
           )}
@@ -113,6 +120,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
           <FileJobRow
             key={job.id}
             job={job}
+            onStart={onStartJob}
             onRemove={onRemoveJob}
             onRetry={onRetryJob}
             onUpdateTranscript={onUpdateTranscript}

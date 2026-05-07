@@ -96,7 +96,7 @@ yarn preview
 - **Vite**
 - **FFmpeg (via @ffmpeg/ffmpeg)**
 - **Groq SDK & OpenAI SDK**
-- **react-audio-voice-recorder**
+- **MediaRecorder API with local recording cache**
 
 ## Project Structure
 

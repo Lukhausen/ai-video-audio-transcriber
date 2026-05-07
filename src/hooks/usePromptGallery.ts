@@ -5,67 +5,111 @@ export interface PromptItem {
   text: string;
   custom: boolean;
   lastUsed?: number;
+  useCount?: number;
 }
 
+const CUSTOM_PROMPTS_KEY = 'customPrompts';
+const PROMPT_USAGE_KEY = 'promptUsage';
+
+type PromptUsage = Record<string, { useCount: number; lastUsed: number }>;
+
+const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
+const promptKey = (text: string) => normalizePrompt(text).toLowerCase();
+
 export function usePromptGallery() {
-  // Store only custom (user‑added) prompts in state.
   const [customPrompts, setCustomPrompts] = useState<PromptItem[]>(() => {
     try {
-      const stored = localStorage.getItem('customPrompts');
-      return stored ? JSON.parse(stored) as PromptItem[] : [];
+      const stored = localStorage.getItem(CUSTOM_PROMPTS_KEY);
+      const parsed = stored ? JSON.parse(stored) as PromptItem[] : [];
+      return parsed.map(prompt => ({
+        ...prompt,
+        text: normalizePrompt(prompt.text),
+        custom: true,
+      }));
     } catch (error) {
       console.error('Error loading custom prompts:', error);
       return [];
     }
   });
 
-  // Persist only custom prompts to localStorage.
+  const [promptUsage, setPromptUsage] = useState<PromptUsage>(() => {
+    try {
+      const stored = localStorage.getItem(PROMPT_USAGE_KEY);
+      return stored ? JSON.parse(stored) as PromptUsage : {};
+    } catch (error) {
+      console.error('Error loading prompt usage:', error);
+      return {};
+    }
+  });
+
   useEffect(() => {
-    localStorage.setItem('customPrompts', JSON.stringify(customPrompts));
+    localStorage.setItem(CUSTOM_PROMPTS_KEY, JSON.stringify(customPrompts));
   }, [customPrompts]);
 
-  // The merged prompts: custom prompts get displayed first, then default prompts.
+  useEffect(() => {
+    localStorage.setItem(PROMPT_USAGE_KEY, JSON.stringify(promptUsage));
+  }, [promptUsage]);
+
   const combinedPrompts = useMemo(() => {
-    return [
+    const prompts = [
       ...customPrompts,
-      ...defaultPrompts.map(p => ({ ...p, custom: false }))
+      ...defaultPrompts.map(p => ({ ...p, custom: false })),
     ];
-  }, [customPrompts]);
 
-  // Add a new custom prompt.
-  // The new prompt is prepended so that it appears at the top.
+    return prompts
+      .map((prompt, index) => {
+        const usage = promptUsage[promptKey(prompt.text)];
+        return {
+          ...prompt,
+          useCount: usage?.useCount ?? prompt.useCount ?? 0,
+          lastUsed: usage?.lastUsed ?? prompt.lastUsed ?? 0,
+          originalIndex: index,
+        };
+      })
+      .sort((a, b) => {
+        if (b.useCount !== a.useCount) return b.useCount - a.useCount;
+        if ((b.lastUsed || 0) !== (a.lastUsed || 0)) return (b.lastUsed || 0) - (a.lastUsed || 0);
+        return a.originalIndex - b.originalIndex;
+      })
+      .map(({ originalIndex, ...prompt }) => prompt);
+  }, [customPrompts, promptUsage]);
+
   const addCustomPrompt = (text: string) => {
-    const trimmedText = text.trim();
+    const trimmedText = normalizePrompt(text);
     if (!trimmedText) return;
 
-    // Check if this prompt already exists (check both custom and default).
-    const existsInCustom = customPrompts.some(p => p.text.trim() === trimmedText);
-    const existsInDefault = defaultPrompts.some(p => p.text.trim() === trimmedText);
+    const key = promptKey(trimmedText);
+    const existsInCustom = customPrompts.some(prompt => promptKey(prompt.text) === key);
+    const existsInDefault = defaultPrompts.some(prompt => promptKey(prompt.text) === key);
     if (existsInCustom || existsInDefault) return;
 
-    const newPrompt: PromptItem = { text: trimmedText, custom: true, lastUsed: Date.now() };
-    // Prepend so that the new prompt is on top.
-    setCustomPrompts(prev => [newPrompt, ...prev]);
+    setCustomPrompts(prev => [{ text: trimmedText, custom: true }, ...prev]);
   };
 
-  // Remove a custom prompt.
-  // The parameter 'index' here is the index in the merged (combined) array.
-  // Since default prompts appear after custom ones, if index is within [0, customPrompts.length),
-  // then remove the corresponding custom prompt.
-  const removeCustomPrompt = (index: number) => {
-    if (index < 0 || index >= customPrompts.length) return;
-    setCustomPrompts(prev => prev.filter((_, i) => i !== index));
+  const removeCustomPrompt = (text: string) => {
+    const key = promptKey(text);
+    setCustomPrompts(prev => prev.filter(prompt => promptKey(prompt.text) !== key));
+    setPromptUsage(prev => {
+      const rest = { ...prev };
+      delete rest[key];
+      return rest;
+    });
   };
 
-  // Update lastUsed for a prompt.
-  // In this implementation updatePromptUsage doesn't re-sort the list.
-  // Only when a new prompt is added is the new ordering applied.
-  const updatePromptUsage = (index: number) => {
-    if (index < 0 || index >= customPrompts.length) return;
-    setCustomPrompts(prev => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], lastUsed: Date.now() };
-      return updated;
+  const updatePromptUsage = (text: string) => {
+    const normalized = normalizePrompt(text);
+    if (!normalized) return;
+
+    const key = promptKey(normalized);
+    setPromptUsage(prev => {
+      const current = prev[key];
+      return {
+        ...prev,
+        [key]: {
+          useCount: (current?.useCount ?? 0) + 1,
+          lastUsed: Date.now(),
+        },
+      };
     });
   };
 
@@ -75,4 +119,4 @@ export function usePromptGallery() {
     removeCustomPrompt,
     updatePromptUsage,
   };
-} 
+}

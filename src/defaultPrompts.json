@@ -1,14 +1,14 @@
 [
   {
-    "text": "Summarize this audio transcript of a lecture concisely, focusing on the main points.",
+    "text": "Clean up this transcript into a clear summary with key points, decisions, and action items.",
     "custom": false
   },
   {
-    "text": "Create a handout with key concepts and takeaways from this audio transcript of a lecture.",
+    "text": "Turn this transcript into concise meeting notes with decisions, owners, deadlines, and next steps.",
     "custom": false
   },
   {
-    "text": "Extract key bullet points and action items from this audio transcript of a lecture.",
+    "text": "Rewrite this transcript into polished text while keeping the original meaning and structure.",
     "custom": false
   }
 ] 

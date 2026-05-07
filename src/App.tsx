@@ -3,24 +3,68 @@ import React, { useState, useRef, useEffect, useMemo } from "react";
 
 // Ant Design components and icons
 import { ConfigProvider, theme, Upload, Switch } from "antd";
-import { FileAddOutlined, GithubOutlined } from "@ant-design/icons";
+import { FileAddOutlined, GithubOutlined, ProfileOutlined, SettingOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd/es/upload";
 
 // Toast notifications
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-// Voice recorder
-import { AudioRecorder } from "react-audio-voice-recorder";
-
 // Hooks & Components
 import { useFFmpegPool } from "./hooks/useFFmpegPool";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import StickyProgress from "./components/StickyProgress";
 import FileJobTable from "./components/FileJobTable";
+import FileJobRow from "./components/FileJobRow";
+import PersistentAudioRecorder from "./components/PersistentAudioRecorder";
 import BatchLLMPanel from "./components/BatchLLMPanel";
+import {
+  getStoredModel,
+  GROQ_AUDIO_MODELS,
+  GROQ_CHAT_MODELS,
+  OPENAI_AUDIO_MODELS,
+  OPENAI_CHAT_MODELS,
+} from "./modelOptions";
 
-import type { LogMessage, ApiConfig } from "./types";
+import type { LogMessage, ApiConfig, FileJob } from "./types";
+
+const RECENT_TRANSCRIPTS_KEY = "recentTranscriptions";
+const RECENT_TRANSCRIPTS_LIMIT = 3;
+
+const PLACEHOLDER_TRANSCRIPT_JOB: FileJob = {
+  id: "placeholder-transcript",
+  fileName: "meeting-recording.mp3",
+  fileSize: 24.8 * 1024 * 1024,
+  mimeType: "audio/mp3",
+  status: "done",
+  progress: 100,
+  transcript: "This is where the first lines of a completed transcript appear, so you can quickly check that the file transcribed correctly.",
+  addedAt: 0,
+};
+
+type RecentTranscription = {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  transcript: string;
+  cachedAt: number;
+};
+
+function loadRecentTranscriptions(): RecentTranscription[] {
+  try {
+    const stored = localStorage.getItem(RECENT_TRANSCRIPTS_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.slice(0, RECENT_TRANSCRIPTS_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentTranscriptions(items: RecentTranscription[]) {
+  localStorage.setItem(RECENT_TRANSCRIPTS_KEY, JSON.stringify(items.slice(0, RECENT_TRANSCRIPTS_LIMIT)));
+}
 
 const App: React.FC = () => {
   // -----------------------------------------------------------------
@@ -31,17 +75,17 @@ const App: React.FC = () => {
   );
   const [groqKey, setGroqKey] = useState(localStorage.getItem("groqKey") || "");
   const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("openaiKey") || "");
-  const [groqModel, setGroqModel] = useState(localStorage.getItem("groqModel") || "whisper-large-v3");
-  const [openaiModel, setOpenaiModel] = useState(localStorage.getItem("openaiModel") || "whisper-1");
+  const [groqModel, setGroqModel] = useState(getStoredModel("groqModel", GROQ_AUDIO_MODELS));
+  const [openaiModel, setOpenaiModel] = useState(getStoredModel("openaiModel", OPENAI_AUDIO_MODELS));
   const [maxFileSizeMB, setMaxFileSizeMB] = useState(25);
   const [sampleRate, setSampleRate] = useState(
     parseInt(localStorage.getItem("sampleRate") || "16000", 10)
   );
   const [openAiChatModel, setOpenAiChatModel] = useState(
-    localStorage.getItem("openAiChatModel") || "chatgpt-4o-latest"
+    getStoredModel("openAiChatModel", OPENAI_CHAT_MODELS)
   );
   const [groqChatModel, setGroqChatModel] = useState(
-    localStorage.getItem("groqChatModel") || "llama-3.3-70b-versatile"
+    getStoredModel("groqChatModel", GROQ_CHAT_MODELS)
   );
 
   // Automation settings
@@ -49,7 +93,7 @@ const App: React.FC = () => {
     localStorage.getItem("autoTranscribe") === "true"
   );
   const [autoCopyToClipboard, setAutoCopyToClipboard] = useState(
-    localStorage.getItem("autoCopyToClipboard") === "true"
+    localStorage.getItem("autoCopyToClipboard") !== "false"
   );
 
   // UI toggles
@@ -59,6 +103,7 @@ const App: React.FC = () => {
   // Log state
   const [logMessages, setLogMessages] = useState<LogMessage[]>([]);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const [recentTranscriptions, setRecentTranscriptions] = useState<RecentTranscription[]>(loadRecentTranscriptions);
 
   // -----------------------------------------------------------------
   // API CONFIG REF (read by processing hooks without stale closures)
@@ -141,25 +186,20 @@ const App: React.FC = () => {
   const handleGroqChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     handleApiSettingChange(e.target.value, setGroqChatModel, "groqChatModel", `Groq Chat Model: "${e.target.value}".`);
   };
+  const handleOpenAiChatModelValueChange = (model: string) => {
+    handleApiSettingChange(model, setOpenAiChatModel, "openAiChatModel", `OpenAI Chat Model: "${model}".`);
+  };
+  const handleGroqChatModelValueChange = (model: string) => {
+    handleApiSettingChange(model, setGroqChatModel, "groqChatModel", `Groq Chat Model: "${model}".`);
+  };
 
   // -----------------------------------------------------------------
   // VOICE RECORDER
   // -----------------------------------------------------------------
-  const handleRecordingComplete = (blob: Blob) => {
-    const now = new Date();
-    const ts = [
-      now.getFullYear(), '-',
-      String(now.getMonth() + 1).padStart(2, '0'), '-',
-      String(now.getDate()).padStart(2, '0'), '_',
-      String(now.getHours()).padStart(2, '0'), '-',
-      String(now.getMinutes()).padStart(2, '0'), '-',
-      String(now.getSeconds()).padStart(2, '0'),
-    ].join('');
-    const fileName = `Recording_${ts}.mp3`;
-    const file = new File([blob], fileName, { type: blob.type });
+  const handleRecordingComplete = (file: File, shouldTranscribeNow = false) => {
     queue.addFiles([file]);
 
-    if (autoTranscribe) {
+    if (shouldTranscribeNow || autoTranscribe) {
       // Start immediately after adding
       setTimeout(() => queue.startAll(), 100);
     }
@@ -212,12 +252,72 @@ const App: React.FC = () => {
     toast.success("Download initiated!", { autoClose: 3000, style: { backgroundColor: "#fff", color: "#000" } });
   };
 
+  const updateRecentTranscriptions = (updater: (items: RecentTranscription[]) => RecentTranscription[]) => {
+    setRecentTranscriptions(prev => {
+      const next = updater(prev).slice(0, RECENT_TRANSCRIPTS_LIMIT);
+      saveRecentTranscriptions(next);
+      return next;
+    });
+  };
+
+  const removeRecentTranscription = (id: string) => {
+    updateRecentTranscriptions(items => items.filter(item => item.id !== id));
+  };
+
+  const updateRecentTranscript = (id: string, transcript: string) => {
+    updateRecentTranscriptions(items =>
+      items.map(item => item.id === id ? { ...item, transcript } : item)
+    );
+  };
+
+  // -----------------------------------------------------------------
+  // CACHE completed transcripts
+  // -----------------------------------------------------------------
+  useEffect(() => {
+    const completedJobs = queue.jobs.filter(j => j.status === 'done' && j.transcript);
+    if (completedJobs.length === 0) return;
+
+    updateRecentTranscriptions(current => {
+      const byId = new Map(current.map(item => [item.id, item]));
+
+      for (const job of completedJobs) {
+        byId.set(job.id, {
+          id: job.id,
+          fileName: job.fileName,
+          fileSize: job.fileSize,
+          mimeType: job.mimeType,
+          transcript: job.transcript!,
+          cachedAt: byId.get(job.id)?.cachedAt || Date.now(),
+        });
+      }
+
+      return Array.from(byId.values())
+        .sort((a, b) => b.cachedAt - a.cachedAt)
+        .slice(0, RECENT_TRANSCRIPTS_LIMIT);
+    });
+  }, [queue.jobs]);
+
+  const recentJobs = useMemo<FileJob[]>(() => (
+    recentTranscriptions.map(item => ({
+      id: item.id,
+      fileName: item.fileName,
+      fileSize: item.fileSize,
+      mimeType: item.mimeType,
+      status: 'done',
+      progress: 100,
+      transcript: item.transcript,
+      addedAt: item.cachedAt,
+    }))
+  ), [recentTranscriptions]);
+
   // -----------------------------------------------------------------
   // AUTO-COPY on completion
   // -----------------------------------------------------------------
   const prevCompletedRef = useRef(0);
   useEffect(() => {
-    if (autoCopyToClipboard && queue.completedCount > prevCompletedRef.current) {
+    const isSingleFileQueue = queue.jobs.length === 1;
+
+    if (autoCopyToClipboard && isSingleFileQueue && queue.completedCount > prevCompletedRef.current) {
       // Find the newly completed job(s)
       const completedJobs = queue.jobs.filter(j => j.status === 'done' && j.transcript);
       if (completedJobs.length > 0) {
@@ -227,7 +327,7 @@ const App: React.FC = () => {
       }
     }
     prevCompletedRef.current = queue.completedCount;
-  }, [queue.completedCount, autoCopyToClipboard]);
+  }, [queue.completedCount, queue.jobs, autoCopyToClipboard]);
 
   // Currently processing file name (for sticky progress)
   const currentProcessingFile = useMemo(() => {
@@ -236,6 +336,12 @@ const App: React.FC = () => {
     );
     return active?.fileName;
   }, [queue.jobs]);
+
+  const completedRecordingFileNames = useMemo(() => (
+    queue.jobs
+      .filter(j => j.status === 'done' && j.transcript && j.fileName.startsWith('Recording_'))
+      .map(j => j.fileName)
+  ), [queue.jobs]);
 
   // -----------------------------------------------------------------
   // RENDER
@@ -257,14 +363,20 @@ const App: React.FC = () => {
 
       <div className="app-container">
         {/* Header */}
-        <h2 className="header-title">AI Audio/Video Transcription & Summaries</h2>
-        <p style={{ margin: "1rem 0", fontSize: "1rem", color: "#ccc" }}>
-          Easily convert audio or video files to text, then use an LLM to summarize or otherwise transform the resulting transcript.
-          Everything runs locally and uses your own API key. Drop multiple files for batch processing.
+        <h2 className="header-title">Audio/Video Transcription</h2>
+        <p className="header-subtitle">
+          Convert audio or video to text, then summarize or transform transcripts with an LLM using your own API key.
         </p>
 
         {/* API Provider & Basic Config */}
         <div className="control-panel">
+          <div className="panel-heading">
+            <h3>Setup</h3>
+            <button className="settings-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
+              <SettingOutlined />
+              <span>{showAdvanced ? "Hide advanced settings" : "Advanced settings"}</span>
+            </button>
+          </div>
           <div className="control-row">
             <label>API Provider:</label>
             <select className="input-standard" value={selectedApi} onChange={handleApiProviderChange}>
@@ -280,7 +392,7 @@ const App: React.FC = () => {
                 <input className="input-standard" type="text" value={groqKey} onChange={handleGroqKeyChange} placeholder="Enter Groq API key" />
               </div>
             ) : (
-              <p className="api-key-message">Groq API Key is set. Update in Advanced Options if needed.</p>
+              <p className="api-key-message">Groq API key saved. Change it in advanced settings.</p>
             )
           ) : !openaiKey ? (
             <div className="control-row">
@@ -288,21 +400,17 @@ const App: React.FC = () => {
               <input className="input-standard" type="text" value={openaiKey} onChange={handleOpenaiKeyChange} placeholder="Enter OpenAI API key" />
             </div>
           ) : (
-            <p className="api-key-message">OpenAI API Key is set. Update in Advanced Options if needed.</p>
+            <p className="api-key-message">OpenAI API key saved. Change it in advanced settings.</p>
           )}
-
-          <button className="btn-standard" onClick={() => setShowAdvanced(!showAdvanced)}>
-            {showAdvanced ? "Hide Advanced Options" : "Show Advanced Options"}
-          </button>
         </div>
 
         {/* Advanced Panel */}
         {showAdvanced && (
           <div className="advanced-panel">
             <div className="settings-group">
-              <div className="settings-separator"><span>Automation Settings</span></div>
+              <div className="settings-separator"><span>Automation</span></div>
               <div className="control-row">
-                <label>Transcribe Immediately After Recording:</label>
+                <label>Auto-transcribe recordings:</label>
                 <Switch checked={autoTranscribe} onChange={(checked: boolean) => {
                   setAutoTranscribe(checked);
                   localStorage.setItem("autoTranscribe", checked.toString());
@@ -310,7 +418,7 @@ const App: React.FC = () => {
                 }} />
               </div>
               <div className="control-row">
-                <label>Copy Transcription to Clipboard Automatically:</label>
+                <label>Auto-copy single transcript:</label>
                 <Switch checked={autoCopyToClipboard} onChange={(checked: boolean) => {
                   setAutoCopyToClipboard(checked);
                   localStorage.setItem("autoCopyToClipboard", checked.toString());
@@ -320,32 +428,40 @@ const App: React.FC = () => {
             </div>
 
             <div className="settings-group">
-              <div className="settings-separator"><span>API Settings</span></div>
+              <div className="settings-separator"><span>Transcription</span></div>
               {selectedApi === "groq" && groqKey && (
                 <div className="control-row">
-                  <label>Groq API Key (masked):</label>
+                  <label>Groq API key:</label>
                   <input className="input-standard" type="password" value={groqKey} onChange={handleGroqKeyChange} />
                 </div>
               )}
               {selectedApi === "openai" && openaiKey && (
                 <div className="control-row">
-                  <label>OpenAI API Key (masked):</label>
+                  <label>OpenAI API key:</label>
                   <input className="input-standard" type="password" value={openaiKey} onChange={handleOpenaiKeyChange} />
                 </div>
               )}
               {selectedApi === "groq" ? (
                 <div className="control-row">
-                  <label>Groq Model (Audio):</label>
-                  <input className="input-standard" type="text" value={groqModel} onChange={handleGroqModelChange} placeholder="e.g. whisper-large-v3" />
+                  <label>Audio model:</label>
+                  <select className="input-standard" value={groqModel} onChange={handleGroqModelChange}>
+                    {GROQ_AUDIO_MODELS.map(model => (
+                      <option key={model.value} value={model.value}>{model.label}</option>
+                    ))}
+                  </select>
                 </div>
               ) : (
                 <div className="control-row">
-                  <label>OpenAI Model (Audio):</label>
-                  <input className="input-standard" type="text" value={openaiModel} onChange={handleOpenaiModelChange} placeholder="e.g. whisper-1" />
+                  <label>Audio model:</label>
+                  <select className="input-standard" value={openaiModel} onChange={handleOpenaiModelChange}>
+                    {OPENAI_AUDIO_MODELS.map(model => (
+                      <option key={model.value} value={model.value}>{model.label}</option>
+                    ))}
+                  </select>
                 </div>
               )}
               <div className="control-row">
-                <label>Sample Rate:</label>
+                <label>Sample rate:</label>
                 <select className="input-standard" value={sampleRate} onChange={handleSampleRateChange}>
                   <option value="8000">8 kHz</option>
                   <option value="16000">16 kHz</option>
@@ -355,24 +471,24 @@ const App: React.FC = () => {
                 </select>
               </div>
               <div className="control-row">
-                <label>Max File Size (MB):</label>
+                <label>Segment size (MB):</label>
                 <input className="input-standard" type="number" value={maxFileSizeMB} onChange={handleMaxFileSizeChange} min="1" />
               </div>
 
-              <div className="settings-separator"><span>Chat Model Settings</span></div>
+              <div className="settings-separator"><span>AI</span></div>
               <div className="control-row">
-                <label>Chat Model:</label>
+                <label>AI model:</label>
                 {selectedApi === "openai" ? (
                   <select className="input-standard" value={openAiChatModel} onChange={handleOpenAiChatModelChange}>
-                    <option value="chatgpt-4o-latest">chatgpt-4o-latest</option>
-                    <option value="gpt-4o-mini">gpt-4o-mini</option>
-                    <option value="o3-mini">o3-mini</option>
-                    <option value="o1">o1</option>
+                    {OPENAI_CHAT_MODELS.map(model => (
+                      <option key={model.value} value={model.value}>{model.label}</option>
+                    ))}
                   </select>
                 ) : (
                   <select className="input-standard" value={groqChatModel} onChange={handleGroqChatModelChange}>
-                    <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
-                    <option value="deepseek-r1-distill-llama-70b">deepseek-r1-distill-llama-70b</option>
+                    {GROQ_CHAT_MODELS.map(model => (
+                      <option key={model.value} value={model.value}>{model.label}</option>
+                    ))}
                   </select>
                 )}
               </div>
@@ -382,48 +498,38 @@ const App: React.FC = () => {
 
         {/* File Upload + Voice Recorder */}
         <div className="control-panel">
+          <div className="panel-heading">
+            <h3>Add media</h3>
+          </div>
           <div className="control-row">
             <Upload.Dragger {...uploadProps} style={{ width: "100%" }}>
               <p className="ant-upload-drag-icon"><FileAddOutlined /></p>
-              <p className="ant-upload-text">Click or drag files to this area to select</p>
+              <p className="ant-upload-text">Drop files here, or click to choose</p>
               <p className="ant-upload-hint">
-                Supports audio and video files. Drop multiple files for batch processing.<br />
-                Files are not uploaded to any server.
+                Audio and video files stay in this browser.
               </p>
             </Upload.Dragger>
           </div>
 
           <div className="control-row" style={{ flexDirection: "column" }}>
-            <p style={{ marginBottom: "0.5rem" }}>Or Record Your Audio</p>
-            <AudioRecorder
-              onRecordingComplete={handleRecordingComplete}
-              audioTrackConstraints={{}}
-              downloadOnSavePress={false}
-              showVisualizer={true}
-              downloadFileExtension="mp3"
+            <PersistentAudioRecorder
+              completedRecordingFileNames={completedRecordingFileNames}
+              onRecordingReady={handleRecordingComplete}
+              onLog={appendLog}
             />
           </div>
-
-          {/* Quick Transcribe All button when files are queued */}
-          {queue.jobs.some(j => j.status === 'queued') && queue.globalStatus !== 'processing' && (
-            <button
-              className="btn-standard btn-standard-full"
-              onClick={queue.startAll}
-              disabled={!ffmpegPool.isReady}
-            >
-              {ffmpegPool.isReady ? `Transcribe ${queue.jobs.filter(j => j.status === 'queued').length} File(s)` : 'Loading FFmpeg...'}
-            </button>
-          )}
         </div>
 
         {/* Job Table */}
-        {queue.jobs.length > 0 && (
+        {queue.jobs.length > 0 ? (
           <FileJobTable
             jobs={queue.jobs}
             globalStatus={queue.globalStatus}
+            isTranscriptionReady={ffmpegPool.isReady}
             onStartAll={queue.startAll}
             onPause={queue.pause}
             onResume={queue.resume}
+            onStartJob={queue.startJob}
             onRemoveJob={queue.removeJob}
             onRetryJob={queue.retryJob}
             onUpdateTranscript={queue.updateTranscript}
@@ -431,6 +537,40 @@ const App: React.FC = () => {
             onCopy={handleCopy}
             onDownload={handleDownload}
           />
+        ) : recentJobs.length > 0 ? (
+          <div className="job-table job-table-recent">
+            <div className="job-table-actions">
+              <div className="job-table-stats">
+                <span>Recent transcripts</span>
+              </div>
+            </div>
+            <div className="job-table-rows">
+              {recentJobs.map(job => (
+                <FileJobRow
+                  key={job.id}
+                  job={job}
+                  onStart={() => undefined}
+                  onRemove={removeRecentTranscription}
+                  onRetry={() => undefined}
+                  onUpdateTranscript={updateRecentTranscript}
+                  onCopy={handleCopy}
+                  onDownload={handleDownload}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="job-table job-table-empty">
+            <FileJobRow
+              job={PLACEHOLDER_TRANSCRIPT_JOB}
+              onStart={() => undefined}
+              onRemove={() => undefined}
+              onRetry={() => undefined}
+              onUpdateTranscript={() => undefined}
+              onCopy={() => undefined}
+              onDownload={() => undefined}
+            />
+          </div>
         )}
 
         {/* Batch LLM Panel */}
@@ -442,6 +582,8 @@ const App: React.FC = () => {
           openaiKey={openaiKey}
           openAiChatModel={openAiChatModel}
           groqChatModel={groqChatModel}
+          onOpenAiChatModelChange={handleOpenAiChatModelValueChange}
+          onGroqChatModelChange={handleGroqChatModelValueChange}
           onLog={appendLog}
           onSetLLMResult={queue.setLLMResult}
           onCopy={handleCopy}
@@ -449,16 +591,17 @@ const App: React.FC = () => {
         />
 
         {/* Log Console Toggle */}
-        <div style={{ textAlign: "right", marginTop: "2rem", marginBottom: "1rem" }}>
-          <button className="btn-standard" onClick={() => setShowLogConsole(prev => !prev)}>
-            {showLogConsole ? "Hide Log Console" : "Show Log Console"}
+        <div className="utility-toggle-row">
+          <button className="settings-toggle" onClick={() => setShowLogConsole(prev => !prev)}>
+            <ProfileOutlined />
+            <span>{showLogConsole ? "Hide processing log" : "Processing log"}</span>
           </button>
         </div>
 
         {/* Log Console */}
         {showLogConsole && (
           <div className="log-section">
-            <h3>Log Console</h3>
+            <h3>Processing log</h3>
             <div className="log-container" ref={logContainerRef}>
               {logMessages.map((logMsg, idx) => {
                 const isLast = idx === logMessages.length - 1;

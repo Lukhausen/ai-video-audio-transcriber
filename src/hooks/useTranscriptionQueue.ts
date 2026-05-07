@@ -468,6 +468,16 @@ export function useTranscriptionQueue(config: QueueConfig) {
     }
   }, [state.globalStatus, processJob, updateJob]);
 
+  // ---- Process one queued job ----
+  const startJob = useCallback(async (id: string) => {
+    if (state.globalStatus === 'processing') return;
+
+    pausedRef.current = false;
+    dispatch({ type: 'SET_GLOBAL', status: 'processing' });
+    await processJob(id);
+    dispatch({ type: 'SET_GLOBAL', status: 'idle' });
+  }, [state.globalStatus, processJob]);
+
   // ---- Update transcript (user editing) ----
   const updateTranscript = useCallback((id: string, text: string) => {
     updateJob(id, { transcript: text });
@@ -495,6 +505,7 @@ export function useTranscriptionQueue(config: QueueConfig) {
     startAll,
     pause,
     resume,
+    startJob,
     retryJob,
     updateTranscript,
     clearCompleted,

@@ -1,9 +1,17 @@
 import { useState, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface CollapsibleLLMOutputProps {
   content: string;
 }
+
+const MarkdownContent = ({ content }: { content: string }) => (
+  <div className="markdown-content">
+    <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+  </div>
+);
 
 // Define ref type with available methods
 export interface CollapsibleLLMOutputRef {
@@ -81,7 +89,7 @@ const CollapsibleLLMOutput = forwardRef<CollapsibleLLMOutputRef, CollapsibleLLMO
               </div>
               {isExpanded && (
                 <div className="thinking-content">
-                  <pre>{part.content}</pre>
+                  <MarkdownContent content={part.content} />
                 </div>
               )}
             </div>
@@ -92,7 +100,7 @@ const CollapsibleLLMOutput = forwardRef<CollapsibleLLMOutputRef, CollapsibleLLMO
         if (part.content.trim()) {
           return (
             <div key={part.id} className="regular-content">
-              <pre>{part.content}</pre>
+              <MarkdownContent content={part.content} />
             </div>
           );
         }

@@ -67,6 +67,15 @@ body {
   color: var(--color-text-primary);
   scrollbar-color: var(--color-border-hover) var(--color-bg-tertiary);
   scrollbar-width: thin;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 * {
@@ -106,18 +115,26 @@ body {
 
 /* Container */
 .app-container {
-  max-width: 1000px;
+  width: min(1120px, calc(100% - 2rem));
   margin: 1rem auto;
-  padding: 0 1rem;
+  padding: 0;
   text-align: center;
 }
 
 /* Header */
 .header-title {
-  margin-bottom: 2rem;
+  margin-bottom: 0.4rem;
   font-size: 1.75rem;
   font-weight: 600;
   color: #fff;
+}
+
+.header-subtitle {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  margin: 0 auto 1.5rem;
+  max-width: 720px;
 }
 
 /* Control Panel */
@@ -125,6 +142,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  width: 100%;
+  min-width: 0;
   background-color: var(--color-bg-secondary);
   border-radius: var(--radius-md);
   padding: var(--spacing-md);
@@ -136,6 +155,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
+}
+
+.control-row > * {
+  min-width: 0;
 }
 
 .control-row label {
@@ -399,6 +423,58 @@ button.transcript-icon:active {
   padding: var(--spacing-lg);
   margin-top: 2rem;
   box-shadow: var(--shadow-md);
+  width: 100%;
+  min-width: 0;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  text-align: left;
+}
+
+.panel-heading h3 {
+  color: var(--color-text-primary);
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.panel-heading p {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.settings-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0.15rem 0;
+  transition: color var(--transition-fast);
+}
+
+.settings-toggle:hover {
+  color: var(--color-text-primary);
+}
+
+.settings-toggle svg {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+}
+
+.utility-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 1.5rem 0 0.75rem;
 }
 
 /* LLM Post-Processing Panel Header */
@@ -411,7 +487,9 @@ button.transcript-icon:active {
 
 .llm-panel-title {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
 }
 
 .llm-panel-title h3 {
@@ -421,10 +499,19 @@ button.transcript-icon:active {
   color: var(--color-text-primary);
 }
 
+.llm-panel-title p {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .llm-panel-controls {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .model-selector {
@@ -444,7 +531,6 @@ button.transcript-icon:active {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  padding: 0.4rem 0.8rem;
   font-size: 0.9rem;
   min-width: 200px;
 }
@@ -574,12 +660,26 @@ button.transcript-icon:active {
   outline: none;
 }
 
+select.input-standard {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--color-text-secondary) 50%),
+    linear-gradient(135deg, var(--color-text-secondary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 12px) 50%;
+  background-repeat: no-repeat;
+  background-size: 6px 6px, 6px 6px;
+  padding-right: 2.25rem;
+}
+
 /* Standardized Button */
 .btn-standard {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
+  min-width: 0;
   background-color: var(--color-button);
   border: none;
   border-radius: var(--radius-md);
@@ -603,11 +703,6 @@ button.transcript-icon:active {
 
 .btn-standard svg {
   flex-shrink: 0;
-}
-
-.btn-standard-full {
-  width: 100%;
-  padding: 0.8em;
 }
 
 /* Update the control row for switch alignment */
@@ -687,16 +782,131 @@ button.transcript-icon:active {
 /* CollapsibleLLMOutput Component */
 .collapsible-llm-output {
   width: 100%;
-  font-family: monospace;
-  white-space: pre-wrap;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  white-space: normal;
   word-break: break-word;
 }
 
-.collapsible-llm-output pre {
-  margin: 0;
-  font-family: inherit;
-  white-space: pre-wrap;
-  word-break: break-word;
+.markdown-content {
+  width: 100%;
+  white-space: normal;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre,
+.markdown-content table {
+  margin: 0 0 0.75rem;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  margin: 1rem 0 0.5rem;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.markdown-content h1 {
+  font-size: 1.35rem;
+}
+
+.markdown-content h2 {
+  font-size: 1.2rem;
+}
+
+.markdown-content h3 {
+  font-size: 1.08rem;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.25rem;
+}
+
+.markdown-content li + li {
+  margin-top: 0.25rem;
+}
+
+.markdown-content a {
+  color: var(--color-accent);
+}
+
+.markdown-content blockquote {
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  color: var(--color-text-tertiary);
+  border-left: 3px solid var(--color-border-hover);
+}
+
+.markdown-content code {
+  padding: 0.1rem 0.3rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.markdown-content pre {
+  margin: 0 0 0.75rem;
+  padding: 0.85rem;
+  overflow-x: auto;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.markdown-content pre code {
+  display: block;
+  padding: 0;
+  overflow-wrap: normal;
+  white-space: pre;
+  background: transparent;
+  border: 0;
+}
+
+.markdown-content table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  scrollbar-gutter: stable;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--color-border);
+}
+
+.markdown-content th {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  background: var(--color-bg-tertiary);
+}
+
+.markdown-content tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .thinking-section {
@@ -800,6 +1010,8 @@ button.transcript-icon:active {
    MULTI-FILE: Job Table
    ================================================ */
 .job-table {
+  width: 100%;
+  min-width: 0;
   margin: 1.5rem 0;
   background: var(--color-bg-secondary);
   border-radius: var(--radius-md);
@@ -808,12 +1020,11 @@ button.transcript-icon:active {
 }
 
 .job-table-actions {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--color-border);
-  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -821,17 +1032,131 @@ button.transcript-icon:active {
   font-size: 0.9rem;
   color: var(--color-text-secondary);
   font-weight: 500;
+  text-align: left;
+  min-width: 0;
 }
 
 .job-table-buttons {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(6.5rem, max-content);
   gap: 0.5rem;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.job-table-buttons .btn-standard {
+  width: 100%;
 }
 
 .job-table-rows {
   display: flex;
   flex-direction: column;
+}
+
+.job-table-empty {
+  opacity: 0.56;
+  pointer-events: none;
+}
+
+.job-table-recent .job-row-progress-fill {
+  background-color: var(--color-border-hover) !important;
+}
+
+.job-table-recent .status-pill {
+  color: var(--color-text-tertiary) !important;
+}
+
+.job-table-recent .status-pill .anticon {
+  color: var(--color-text-tertiary) !important;
+}
+
+.job-row-placeholder {
+  border-bottom: none;
+}
+
+.job-row-placeholder:hover {
+  background: transparent;
+}
+
+.persistent-recorder {
+  width: 100%;
+}
+
+.persistent-recorder-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.persistent-recorder-time {
+  color: var(--color-text-tertiary);
+  font-family: monospace;
+  font-size: 0.95rem;
+  min-width: 3.5rem;
+  text-align: left;
+}
+
+.recent-recordings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  width: 100%;
+}
+
+.recent-recording {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+  text-align: left;
+}
+
+.recent-recording > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-recording small {
+  color: var(--color-text-tertiary);
+  font-size: 0.75rem;
+}
+
+.recent-recording > div {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+}
+
+.recent-recording audio {
+  display: none;
+}
+
+.recent-recording .transcript-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+  font-size: 1rem;
+  border-radius: var(--radius-sm);
+}
+
+.recent-recording-add:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.recent-recording-draft {
+  border-color: var(--color-accent);
 }
 
 /* ================================================
@@ -852,14 +1177,19 @@ button.transcript-icon:active {
 
 .job-row-main {
   display: grid;
-  grid-template-columns: 1fr 160px 110px auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  grid-template-columns: minmax(0, 1fr) 120px minmax(136px, auto);
+  grid-template-areas:
+    "file status actions"
+    "progress progress actions";
+  align-items: start;
+  column-gap: 1rem;
+  row-gap: 0.65rem;
+  padding: 0.9rem 1rem;
   cursor: default;
 }
 
 .job-row-file {
+  grid-area: file;
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
@@ -923,9 +1253,11 @@ button.transcript-icon:active {
 
 /* Progress bar */
 .job-row-progress-container {
+  grid-area: progress;
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  padding-left: 1.7rem;
 }
 
 .job-row-progress-bar {
@@ -956,8 +1288,11 @@ button.transcript-icon:active {
 
 /* Status */
 .job-row-status {
+  grid-area: status;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  min-height: 2rem;
 }
 
 .status-pill {
@@ -971,9 +1306,13 @@ button.transcript-icon:active {
 
 /* Actions */
 .job-row-actions {
+  grid-area: actions;
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  justify-content: flex-end;
+  min-width: 136px;
+  min-height: 2rem;
 }
 
 .job-row-actions .transcript-icon {
@@ -1034,6 +1373,9 @@ button.transcript-icon:active {
 @media (max-width: 640px) {
   .job-row-main {
     grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "file actions"
+      "progress progress";
     gap: 0.5rem;
   }
 
@@ -1045,13 +1387,29 @@ button.transcript-icon:active {
     display: none;
   }
 
+  .job-row-progress-container {
+    padding-left: 0;
+  }
+
   .job-table-actions {
+    display: flex;
     flex-direction: column;
     align-items: stretch;
   }
 
   .job-table-buttons {
+    display: flex;
+    flex-wrap: wrap;
     justify-content: center;
+  }
+
+  .job-table-stats,
+  .job-row-actions {
+    min-width: 0;
+  }
+
+  .job-table-buttons .btn-standard {
+    width: auto;
   }
 
   .sticky-progress-current {

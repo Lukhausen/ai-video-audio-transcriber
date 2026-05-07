@@ -28,7 +28,6 @@ export default defineConfig({
           vendor: ['react', 'react-dom'],
           antd: ['antd', '@ant-design/icons'],
           ffmpeg: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
-          audio: ['react-audio-voice-recorder'],
           ai: ['groq-sdk', 'openai']
         }
       }
