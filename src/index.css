@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:ital,wght@0,400;0,500;0,700;1,400&display=swap');
+
 /* index.css */
 
 /* Reset and Base */
@@ -49,6 +51,7 @@
   --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.1);
   
   /* Typography */
+  --font-family-app: "Google Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-size-sm: 0.9rem;
   --font-size-md: 1rem;
   --font-size-lg: 1.25rem;
@@ -62,7 +65,7 @@
 }
 
 body {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--font-family-app);
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   scrollbar-color: var(--color-border-hover) var(--color-bg-tertiary);
@@ -134,7 +137,8 @@ body,
   font-size: 0.95rem;
   line-height: 1.4;
   margin: 0 auto 1.5rem;
-  max-width: 720px;
+  width: 100%;
+  max-width: none;
 }
 
 /* Control Panel */
@@ -149,6 +153,19 @@ body,
   padding: var(--spacing-md);
   margin-bottom: 2rem;
   box-shadow: var(--shadow-md);
+}
+
+.setup-panel,
+.setup-advanced-panel,
+.add-media-panel {
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.setup-panel-open {
+  margin-bottom: 0;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  box-shadow: none;
 }
 
 .control-row {
@@ -242,11 +259,23 @@ body,
 .advanced-panel {
   background-color: var(--color-bg-tertiary);
   padding: 1rem;
-  margin-top: -0.5rem;
+  margin-top: 0;
+  margin-bottom: 0;
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.setup-advanced-panel {
+  background-color: #252525;
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.setup-advanced-panel + .add-media-panel {
+  margin-top: 2rem;
 }
 
 /* Log Section */

@@ -61,6 +61,7 @@ const SUPPORTED_EXTENSIONS = [
   '.mp4', '.mkv', '.mov', '.avi', '.wmv', '.webm', '.flv',
   '.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.wma', '.opus',
 ];
+const MIN_MEDIA_FILE_BYTES = 1024;
 
 function isSupported(file: File): boolean {
   if (SUPPORTED_PREFIXES.some(p => file.type.startsWith(p))) return true;
@@ -75,6 +76,22 @@ function makeId(): string {
 // Sanitize filename for FFmpeg FS — replace problematic chars
 function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function createConversionError(fileName: string, err: unknown, ffmpegOutput: string): Error {
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  const output = ffmpegOutput.toLowerCase();
+  const looksInvalid =
+    output.includes('invalid frame size') ||
+    output.includes('invalid argument') ||
+    output.includes('format mp3 detected only with low score') ||
+    output.includes('could not find codec parameters');
+
+  if (looksInvalid) {
+    return new Error(`"${fileName}" does not appear to contain valid audio or video data.`);
+  }
+
+  return new Error(rawMessage || `Could not convert "${fileName}".`);
 }
 
 // ---- Hook config ----
@@ -117,7 +134,11 @@ export function useTranscriptionQueue(config: QueueConfig) {
     for (const file of files) {
       // Validate format
       if (!isSupported(file)) {
-        onLog(`Rejected "${file.name}" — unsupported format (${file.type || 'unknown'}).`, 'error');
+        onLog(`Rejected "${file.name}" - unsupported format (${file.type || 'unknown'}).`, 'error');
+        continue;
+      }
+      if (file.size < MIN_MEDIA_FILE_BYTES) {
+        onLog(`Rejected "${file.name}" - file is too small to contain usable audio or video data.`, 'error');
         continue;
       }
       // Duplicate detection
@@ -128,7 +149,7 @@ export function useTranscriptionQueue(config: QueueConfig) {
         return `${bd.file.name}_${bd.file.size}_${bd.file.lastModified}` === fingerprint;
       });
       if (isDupe) {
-        onLog(`"${file.name}" already in queue — adding anyway.`, 'info');
+        onLog(`"${file.name}" already in queue - adding anyway.`, 'info');
       }
 
       const id = makeId();
@@ -178,6 +199,10 @@ export function useTranscriptionQueue(config: QueueConfig) {
 
     // Clean any leftover state
     await cleanFFmpegFS(ffmpeg, mountDir);
+    let ffmpegOutput = '';
+    const logHandler = ({ message }: { message: string }) => {
+      ffmpegOutput += `${message}\n`;
+    };
 
     try {
       await ffmpeg.createDir(mountDir);
@@ -187,10 +212,12 @@ export function useTranscriptionQueue(config: QueueConfig) {
       const inputPath = `${mountDir}/${file.name}`;
 
       const ffmpegCmd = file.type.startsWith('video/')
-        ? ['-i', inputPath, '-ar', cfg.sampleRate.toString(), '-ac', '1', '-map', '0:a', '-c:a', 'libmp3lame', outputFileName]
-        : ['-i', inputPath, '-ar', cfg.sampleRate.toString(), '-ac', '1', '-c:a', 'libmp3lame', outputFileName];
+        ? ['-i', inputPath, '-map', '0:a:0', '-ar', cfg.sampleRate.toString(), '-ac', '1', '-c:a', 'libmp3lame', '-f', 'mp3', outputFileName]
+        : ['-i', inputPath, '-vn', '-map', '0:a:0', '-ar', cfg.sampleRate.toString(), '-ac', '1', '-c:a', 'libmp3lame', '-f', 'mp3', outputFileName];
 
+      ffmpeg.on('log', logHandler);
       await ffmpeg.exec(ffmpegCmd);
+      ffmpeg.off('log', logHandler);
 
       const mp3Data = await ffmpeg.readFile(outputFileName) as unknown as Uint8Array;
 
@@ -201,11 +228,12 @@ export function useTranscriptionQueue(config: QueueConfig) {
 
       return { mp3Data };
     } catch (err) {
+      try { ffmpeg.off('log', logHandler); } catch { /* ok */ }
       // Cleanup on error too
       try { await ffmpeg.unmount(mountDir); } catch { /* ok */ }
       try { await ffmpeg.deleteDir(mountDir); } catch { /* ok */ }
       try { ffmpeg.deleteFile(outputFileName); } catch { /* ok */ }
-      throw err;
+      throw createConversionError(file.name, err, ffmpegOutput);
     }
   }, [getApiConfig]);
 

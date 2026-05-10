@@ -363,13 +363,13 @@ const App: React.FC = () => {
 
       <div className="app-container">
         {/* Header */}
-        <h2 className="header-title">Audio/Video Transcription</h2>
+        <h2 className="header-title">AI Audio/Video Transcription</h2>
         <p className="header-subtitle">
           Convert audio or video to text, then summarize or transform transcripts with an LLM using your own API key.
         </p>
 
         {/* API Provider & Basic Config */}
-        <div className="control-panel">
+        <div className={`control-panel setup-panel ${showAdvanced ? "setup-panel-open" : ""}`}>
           <div className="panel-heading">
             <h3>Setup</h3>
             <button className="settings-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
@@ -406,7 +406,7 @@ const App: React.FC = () => {
 
         {/* Advanced Panel */}
         {showAdvanced && (
-          <div className="advanced-panel">
+          <div className="advanced-panel setup-advanced-panel">
             <div className="settings-group">
               <div className="settings-separator"><span>Automation</span></div>
               <div className="control-row">
@@ -497,7 +497,7 @@ const App: React.FC = () => {
         )}
 
         {/* File Upload + Voice Recorder */}
-        <div className="control-panel">
+        <div className="control-panel add-media-panel">
           <div className="panel-heading">
             <h3>Add media</h3>
           </div>
