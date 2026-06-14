@@ -1,5 +1,5 @@
 import { useState, useMemo, useImperativeHandle, forwardRef } from 'react';
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
+import { TbChevronDown, TbChevronRight } from 'react-icons/tb';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -82,10 +82,10 @@ const CollapsibleLLMOutput = forwardRef<CollapsibleLLMOutputRef, CollapsibleLLMO
               <div 
                 className="thinking-header" 
                 onClick={() => toggleSection(part.id)}
-                title={isExpanded ? "Click to collapse" : "Click to expand"}
+                title={isExpanded ? "Hide model reasoning" : "Show model reasoning"}
               >
-                {isExpanded ? <DownOutlined /> : <RightOutlined />}
-                <span>Thinking</span>
+                {isExpanded ? <TbChevronDown /> : <TbChevronRight />}
+                <span>Model reasoning</span>
               </div>
               {isExpanded && (
                 <div className="thinking-content">

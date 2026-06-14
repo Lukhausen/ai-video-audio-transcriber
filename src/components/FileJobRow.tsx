@@ -1,150 +1,144 @@
 // Individual file job row with expand/collapse for transcript
 import React, { useState } from 'react';
 import { FaCopy, FaFileDownload } from 'react-icons/fa';
-import {
-  LoadingOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  DeleteOutlined,
-  FileTextOutlined,
-  ReloadOutlined,
-  DownOutlined,
-  RightOutlined,
-  CustomerServiceOutlined,
-  VideoCameraOutlined,
-} from '@ant-design/icons';
+import { BiSolidTrashAlt } from 'react-icons/bi';
+import { PiArrowClockwiseBold } from 'react-icons/pi';
+import { LuFileAudio, LuFileVideo } from 'react-icons/lu';
+import { RiCheckboxCircleLine, RiCloseCircleLine } from 'react-icons/ri';
+import { TbChevronDown, TbChevronRight, TbFileTextAi } from 'react-icons/tb';
+import { LoadingOutlined } from '@ant-design/icons';
+import TranscriptSummary from './TranscriptSummary';
 import type { FileJob } from '../types';
+import { hasHiddenTranscriptPreview } from '../utils/transcriptPreview';
 
 interface FileJobRowProps {
   job: FileJob;
   onRemove: (id: string) => void;
   onStart: (id: string) => void;
   onRetry: (id: string) => void;
-  onUpdateTranscript: (id: string, text: string) => void;
   onCopy: (text: string) => void;
   onDownload: (text: string, fileName: string) => void;
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  queued: { label: 'Queued', color: '#888' },
-  converting: { label: 'Converting', color: '#bbb' },
-  splitting: { label: 'Splitting', color: '#bbb' },
+  ready: { label: 'Uploaded', color: '#9a9a9a' },
+  queued: { label: 'Waiting', color: '#888' },
+  converting: { label: 'Preparing audio', color: '#bbb' },
+  splitting: { label: 'Creating chunks', color: '#bbb' },
   transcribing: { label: 'Transcribing', color: '#ccc' },
-  stitching: { label: 'Stitching', color: '#ccc' },
-  done: { label: 'Done', color: 'var(--color-accent)' },
+  stitching: { label: 'Finishing transcript', color: '#ccc' },
+  done: { label: 'Transcribed', color: 'var(--color-text-tertiary)' },
   error: { label: 'Error', color: 'var(--color-error)' },
 };
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function countWords(text?: string): number {
-  return text?.trim().split(/\s+/).filter(Boolean).length || 0;
-}
 
 const FileJobRow: React.FC<FileJobRowProps> = ({
   job,
   onRemove,
   onStart,
   onRetry,
-  onUpdateTranscript,
   onCopy,
   onDownload,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const statusCfg = STATUS_CONFIG[job.status] || STATUS_CONFIG.queued;
   const isActive = ['converting', 'splitting', 'transcribing', 'stitching'].includes(job.status);
-  const canRemove = job.status === 'queued' || job.status === 'done' || job.status === 'error';
+  const canRemove = job.status === 'ready' || job.status === 'queued' || job.status === 'done' || job.status === 'error';
   const isVideo = job.mimeType.startsWith('video/');
-  const transcriptPreview = job.transcript?.trim();
-  const wordCount = countWords(job.transcript);
+  const hasTranscript = Boolean(job.transcript?.trim());
+  const showTranscriptSummary = job.status === 'done' && hasTranscript;
+  const canExpandTranscript = showTranscriptSummary && hasHiddenTranscriptPreview(job.transcript);
+  const isTranscriptExpanded = canExpandTranscript && expanded;
+  const actionLayoutClass = hasTranscript ? 'job-row-actions-grid' : 'job-row-actions-compact';
+  const toggleTranscript = () => {
+    if (canExpandTranscript) setExpanded(e => !e);
+  };
 
   return (
-    <div className={`job-row ${expanded ? 'job-row-expanded' : ''}`}>
+    <div className={`job-row ${showTranscriptSummary ? 'job-row-transcript-first' : ''} ${isTranscriptExpanded ? 'job-row-expanded' : ''}`}>
       {/* Main row */}
-      <div className="job-row-main" onClick={() => job.transcript && setExpanded(e => !e)}>
+      <div className={`job-row-main ${canExpandTranscript ? 'is-expandable' : ''}`} onClick={toggleTranscript}>
         {/* File icon + name */}
-        <div className="job-row-file">
-          <span className="job-row-icon">
-            {isVideo ? <VideoCameraOutlined /> : <CustomerServiceOutlined />}
-          </span>
-          <span className="job-row-file-text">
-            <span className="job-row-file-heading">
-              <span className="job-row-name" title={job.fileName}>{job.fileName}</span>
-              <span className="job-row-size">{formatSize(job.fileSize)}</span>
-              {wordCount > 0 && (
-                <span className="job-row-size">{wordCount.toLocaleString()} words</span>
-              )}
-            </span>
-            {transcriptPreview && (
-              <span className="job-row-preview" title={transcriptPreview}>
-                {transcriptPreview}
+        <div className={`job-row-file ${showTranscriptSummary ? 'job-row-file-transcript-summary' : ''}`}>
+          {showTranscriptSummary ? (
+            <TranscriptSummary
+              fileName={job.fileName}
+              mimeType={job.mimeType}
+              transcript={job.transcript}
+              expanded={isTranscriptExpanded}
+            />
+          ) : (
+            <>
+              <span className="job-row-icon">
+                {isVideo ? <LuFileVideo /> : <LuFileAudio />}
               </span>
-            )}
-          </span>
+              <span className="job-row-file-text">
+                <span className="job-row-file-heading">
+                  <span className="job-row-name" title={job.fileName}>{job.fileName}</span>
+                </span>
+              </span>
+            </>
+          )}
         </div>
 
         {/* Progress bar */}
-        <div className="job-row-progress-container">
-          <div className="job-row-progress-bar">
-            <div
-              className={`job-row-progress-fill ${job.status === 'error' ? 'progress-error' : ''}`}
-              style={{
-                width: `${job.progress}%`,
-                backgroundColor: statusCfg.color,
-              }}
-            />
+        {!showTranscriptSummary && (
+          <div className="job-row-progress-container">
+            <div className="job-row-progress-bar">
+              <div
+                className={`job-row-progress-fill ${job.status === 'error' ? 'progress-error' : ''}`}
+                style={{
+                  width: `${job.progress}%`,
+                  backgroundColor: statusCfg.color,
+                }}
+              />
+            </div>
+            {job.status === 'transcribing' && job.segmentCount && (
+              <span className="job-row-segment-count">
+                {job.segmentsTranscribed || 0}/{job.segmentCount}
+              </span>
+            )}
           </div>
-          {job.status === 'transcribing' && job.segmentCount && (
-            <span className="job-row-segment-count">
-              {job.segmentsTranscribed || 0}/{job.segmentCount}
-            </span>
-          )}
-        </div>
+        )}
 
         {/* Status */}
         <div className="job-row-status">
           <span className="status-pill" style={{ color: statusCfg.color }}>
             {isActive && <LoadingOutlined />}
-            {job.status === 'done' && <CheckCircleOutlined />}
-            {job.status === 'error' && <CloseCircleOutlined />}
+            {job.status === 'done' && <RiCheckboxCircleLine className="status-icon-success" />}
+            {job.status === 'error' && <RiCloseCircleLine />}
             {statusCfg.label}
           </span>
         </div>
 
         {/* Actions */}
-        <div className="job-row-actions" onClick={e => e.stopPropagation()}>
-          {job.status === 'queued' && (
+        <div className={`job-row-actions ${actionLayoutClass}`} onClick={e => e.stopPropagation()}>
+          {(job.status === 'ready' || job.status === 'queued') && (
             <button
-              className="transcript-icon"
+              className="transcript-icon action-transcribe"
               onClick={() => onStart(job.id)}
-              title="Transcribe this file"
-              aria-label={`Transcribe ${job.fileName}`}
+              title="Transcribe only this file"
+              aria-label={`Transcribe only ${job.fileName}`}
             >
-              <FileTextOutlined />
+              <TbFileTextAi />
             </button>
           )}
           {job.transcript && (
             <>
               <button
-                className="transcript-icon"
+                className="transcript-icon action-copy"
                 onClick={() => onCopy(job.transcript!)}
-                title="Copy this transcript to clipboard"
+                title="Copy transcript"
                 aria-label={`Copy transcript for ${job.fileName}`}
               >
                 <FaCopy />
               </button>
               <button
-                className="transcript-icon"
+                className="transcript-icon action-download"
                 onClick={() => {
                   const baseName = job.fileName.replace(/\.[^.]+$/, '');
                   onDownload(job.transcript!, `${baseName}-transcript.txt`);
                 }}
-                title="Download this transcript as a text file"
+                title="Download transcript"
                 aria-label={`Download transcript for ${job.fileName}`}
               >
                 <FaFileDownload />
@@ -153,32 +147,32 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
           )}
           {job.status === 'error' && (
             <button
-              className="transcript-icon"
+              className={`transcript-icon action-retry${job.transcript ? ' action-retry-with-transcript' : ''}`}
               onClick={() => onRetry(job.id)}
-              title="Retry transcription for this file"
+              title="Retry this file"
               aria-label={`Retry transcription for ${job.fileName}`}
             >
-              <ReloadOutlined />
+              <PiArrowClockwiseBold />
             </button>
           )}
           {canRemove && (
             <button
-              className="transcript-icon transcript-icon-danger"
+              className={`transcript-icon transcript-icon-danger action-delete${job.status === 'error' && job.transcript ? ' action-delete-after-retry' : ''}`}
               onClick={() => onRemove(job.id)}
-              title="Remove this file from the list"
+              title="Remove file"
               aria-label={`Remove ${job.fileName} from the list`}
             >
-              <DeleteOutlined />
+              <BiSolidTrashAlt />
             </button>
           )}
-          {job.transcript && (
+          {canExpandTranscript && (
             <button
-              className="transcript-icon expand-toggle"
-              onClick={() => setExpanded(e => !e)}
-              title={expanded ? "Hide full transcript editor" : "Show full transcript editor"}
-              aria-label={`${expanded ? 'Hide' : 'Show'} full transcript editor for ${job.fileName}`}
+              className="transcript-icon expand-toggle action-expand"
+              onClick={toggleTranscript}
+              title={isTranscriptExpanded ? "Show less transcript" : "Show full transcript"}
+              aria-label={`${isTranscriptExpanded ? 'Show less transcript for' : 'Show full transcript for'} ${job.fileName}`}
             >
-              {expanded ? <DownOutlined /> : <RightOutlined />}
+              {isTranscriptExpanded ? <TbChevronDown /> : <TbChevronRight />}
             </button>
           )}
         </div>
@@ -191,16 +185,6 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
         </div>
       )}
 
-      {/* Expanded transcript */}
-      {expanded && job.transcript && (
-        <div className="job-row-transcript">
-          <textarea
-            className="transcript-output transcript-editable"
-            value={job.transcript}
-            onChange={(e) => onUpdateTranscript(job.id, e.target.value)}
-          />
-        </div>
-      )}
     </div>
   );
 };

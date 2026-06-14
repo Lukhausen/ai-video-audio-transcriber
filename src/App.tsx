@@ -3,7 +3,8 @@ import React, { useState, useRef, useEffect, useMemo } from "react";
 
 // Ant Design components and icons
 import { ConfigProvider, theme, Upload, Switch } from "antd";
-import { FileAddOutlined, GithubOutlined, ProfileOutlined, SettingOutlined } from "@ant-design/icons";
+import { FileAddOutlined, GithubOutlined } from "@ant-design/icons";
+import { LuClipboardList, LuSettings2 } from "react-icons/lu";
 import type { UploadProps } from "antd/es/upload";
 
 // Toast notifications
@@ -15,9 +16,9 @@ import { useFFmpegPool } from "./hooks/useFFmpegPool";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import StickyProgress from "./components/StickyProgress";
 import FileJobTable from "./components/FileJobTable";
-import FileJobRow from "./components/FileJobRow";
 import PersistentAudioRecorder from "./components/PersistentAudioRecorder";
 import BatchLLMPanel from "./components/BatchLLMPanel";
+import RecentTranscriptRow from "./components/RecentTranscriptRow";
 import {
   getStoredModel,
   GROQ_AUDIO_MODELS,
@@ -30,17 +31,13 @@ import type { LogMessage, ApiConfig, FileJob } from "./types";
 
 const RECENT_TRANSCRIPTS_KEY = "recentTranscriptions";
 const RECENT_TRANSCRIPTS_LIMIT = 3;
-
-const PLACEHOLDER_TRANSCRIPT_JOB: FileJob = {
-  id: "placeholder-transcript",
-  fileName: "meeting-recording.mp3",
-  fileSize: 24.8 * 1024 * 1024,
-  mimeType: "audio/mp3",
-  status: "done",
-  progress: 100,
-  transcript: "This is where the first lines of a completed transcript appear, so you can quickly check that the file transcribed correctly.",
-  addedAt: 0,
-};
+const SAMPLE_RATE_OPTIONS = [
+  { value: 8000, label: "8 kHz" },
+  { value: 16000, label: "16 kHz" },
+  { value: 22050, label: "22.05 kHz" },
+  { value: 44100, label: "44.1 kHz" },
+  { value: 48000, label: "48 kHz" },
+] as const;
 
 type RecentTranscription = {
   id: string;
@@ -158,8 +155,8 @@ const App: React.FC = () => {
     appendLog(logMessage, "info");
   };
 
-  const handleApiProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    handleApiSettingChange(e.target.value as "groq" | "openai", setSelectedApi, "selectedApi", `Switched API to ${e.target.value}`);
+  const handleApiProviderChange = (provider: "groq" | "openai") => {
+    handleApiSettingChange(provider, setSelectedApi, "selectedApi", `Switched API to ${provider}`);
   };
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     handleApiSettingChange(e.target.value, setGroqKey, "groqKey", "Updated Groq API key.");
@@ -167,24 +164,18 @@ const App: React.FC = () => {
   const handleOpenaiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     handleApiSettingChange(e.target.value, setOpenaiKey, "openaiKey", "Updated OpenAI API key.");
   };
-  const handleGroqModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    handleApiSettingChange(e.target.value, setGroqModel, "groqModel", `Updated Groq model to "${e.target.value}".`);
+  const handleGroqModelChange = (model: string) => {
+    handleApiSettingChange(model, setGroqModel, "groqModel", `Updated Groq model to "${model}".`);
   };
-  const handleOpenaiModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    handleApiSettingChange(e.target.value, setOpenaiModel, "openaiModel", `Updated OpenAI model to "${e.target.value}".`);
+  const handleOpenaiModelChange = (model: string) => {
+    handleApiSettingChange(model, setOpenaiModel, "openaiModel", `Updated OpenAI model to "${model}".`);
   };
   const handleMaxFileSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const n = parseFloat(e.target.value);
     if (!isNaN(n) && n > 0) handleApiSettingChange(n, setMaxFileSizeMB, "maxFileSizeMB", `Max file size: ${n} MB`);
   };
-  const handleSampleRateChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    handleApiSettingChange(parseInt(e.target.value, 10), setSampleRate, "sampleRate", `Sample rate: ${e.target.value} Hz`);
-  };
-  const handleOpenAiChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    handleApiSettingChange(e.target.value, setOpenAiChatModel, "openAiChatModel", `OpenAI Chat Model: "${e.target.value}".`);
-  };
-  const handleGroqChatModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    handleApiSettingChange(e.target.value, setGroqChatModel, "groqChatModel", `Groq Chat Model: "${e.target.value}".`);
+  const handleSampleRateChange = (rate: number) => {
+    handleApiSettingChange(rate, setSampleRate, "sampleRate", `Sample rate: ${rate} Hz`);
   };
   const handleOpenAiChatModelValueChange = (model: string) => {
     handleApiSettingChange(model, setOpenAiChatModel, "openAiChatModel", `OpenAI Chat Model: "${model}".`);
@@ -225,6 +216,30 @@ const App: React.FC = () => {
     showUploadList: false, // We have our own job table
   };
 
+  const currentSampleRateIndex = SAMPLE_RATE_OPTIONS.findIndex(option => option.value === sampleRate);
+  const selectedSampleRateIndex = currentSampleRateIndex >= 0 ? currentSampleRateIndex : 1;
+
+  const renderModelChoice = (
+    options: { value: string; label: string }[],
+    value: string,
+    onChange: (model: string) => void,
+    ariaLabel: string
+  ) => (
+    <div className="segmented-control model-choice-control" role="radiogroup" aria-label={ariaLabel}>
+      {options.map(model => (
+        <button
+          key={model.value}
+          type="button"
+          className={value === model.value ? "is-active" : ""}
+          onClick={() => onChange(model.value)}
+          aria-pressed={value === model.value}
+        >
+          {model.label}
+        </button>
+      ))}
+    </div>
+  );
+
   // -----------------------------------------------------------------
   // COPY / DOWNLOAD UTILITIES
   // -----------------------------------------------------------------
@@ -249,7 +264,7 @@ const App: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    toast.success("Download initiated!", { autoClose: 3000, style: { backgroundColor: "#fff", color: "#000" } });
+    toast.success("Download started.", { autoClose: 3000, style: { backgroundColor: "#fff", color: "#000" } });
   };
 
   const updateRecentTranscriptions = (updater: (items: RecentTranscription[]) => RecentTranscription[]) => {
@@ -262,12 +277,6 @@ const App: React.FC = () => {
 
   const removeRecentTranscription = (id: string) => {
     updateRecentTranscriptions(items => items.filter(item => item.id !== id));
-  };
-
-  const updateRecentTranscript = (id: string, transcript: string) => {
-    updateRecentTranscriptions(items =>
-      items.map(item => item.id === id ? { ...item, transcript } : item)
-    );
   };
 
   // -----------------------------------------------------------------
@@ -365,42 +374,65 @@ const App: React.FC = () => {
         {/* Header */}
         <h2 className="header-title">AI Audio/Video Transcription</h2>
         <p className="header-subtitle">
-          Convert audio or video to text, then summarize or transform transcripts with an LLM using your own API key.
+          Turn audio or video into text, then summarize or rewrite the transcript with AI using your own API key.
         </p>
 
         {/* API Provider & Basic Config */}
         <div className={`control-panel setup-panel ${showAdvanced ? "setup-panel-open" : ""}`}>
-          <div className="panel-heading">
-            <h3>Setup</h3>
-            <button className="settings-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
-              <SettingOutlined />
-              <span>{showAdvanced ? "Hide advanced settings" : "Advanced settings"}</span>
-            </button>
-          </div>
-          <div className="control-row">
-            <label>API Provider:</label>
-            <select className="input-standard" value={selectedApi} onChange={handleApiProviderChange}>
-              <option value="groq">Groq</option>
-              <option value="openai">OpenAI</option>
-            </select>
+          <div className="setup-field-row setup-provider-row">
+            <span className="setup-field-label">API provider:</span>
+            <div className="setup-field-control setup-provider-actions">
+              <div className="segmented-control provider-control" role="radiogroup" aria-label="API provider">
+                <button
+                  type="button"
+                  className={selectedApi === "groq" ? "is-active" : ""}
+                  onClick={() => handleApiProviderChange("groq")}
+                  aria-pressed={selectedApi === "groq"}
+                  aria-label="Use Groq as API provider"
+                >
+                  <img className="provider-logo provider-logo-groq" src="/icons/groq.svg" alt="" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className={selectedApi === "openai" ? "is-active" : ""}
+                  onClick={() => handleApiProviderChange("openai")}
+                  aria-pressed={selectedApi === "openai"}
+                  aria-label="Use OpenAI as API provider"
+                >
+                  <img className="provider-logo provider-logo-openai" src="/icons/openai.svg" alt="" aria-hidden="true" />
+                </button>
+              </div>
+              <button type="button" className="settings-toggle setup-settings-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
+                <LuSettings2 />
+                <span>{showAdvanced ? "Hide advanced" : "Advanced"}</span>
+              </button>
+            </div>
           </div>
 
           {selectedApi === "groq" ? (
             !groqKey ? (
-              <div className="control-row">
-                <label>Groq API Key:</label>
-                <input className="input-standard" type="text" value={groqKey} onChange={handleGroqKeyChange} placeholder="Enter Groq API key" />
+              <div className="setup-field-row">
+                <label className="setup-field-label">Groq API key:</label>
+                <div className="setup-field-control">
+                  <input className="input-standard" type="text" value={groqKey} onChange={handleGroqKeyChange} placeholder="Paste your Groq API key" />
+                </div>
               </div>
             ) : (
-              <p className="api-key-message">Groq API key saved. Change it in advanced settings.</p>
+              <p className="api-key-message setup-field-message">
+                {showAdvanced ? "Groq API key saved." : "Groq API key saved. Change it in advanced settings."}
+              </p>
             )
           ) : !openaiKey ? (
-            <div className="control-row">
-              <label>OpenAI API Key:</label>
-              <input className="input-standard" type="text" value={openaiKey} onChange={handleOpenaiKeyChange} placeholder="Enter OpenAI API key" />
+            <div className="setup-field-row">
+              <label className="setup-field-label">OpenAI API key:</label>
+              <div className="setup-field-control">
+                <input className="input-standard" type="text" value={openaiKey} onChange={handleOpenaiKeyChange} placeholder="Paste your OpenAI API key" />
+              </div>
             </div>
           ) : (
-            <p className="api-key-message">OpenAI API key saved. Change it in advanced settings.</p>
+            <p className="api-key-message setup-field-message">
+              {showAdvanced ? "OpenAI API key saved." : "OpenAI API key saved. Change it in advanced settings."}
+            </p>
           )}
         </div>
 
@@ -410,7 +442,7 @@ const App: React.FC = () => {
             <div className="settings-group">
               <div className="settings-separator"><span>Automation</span></div>
               <div className="control-row">
-                <label>Auto-transcribe recordings:</label>
+                <label>Auto-transcribe new recordings:</label>
                 <Switch checked={autoTranscribe} onChange={(checked: boolean) => {
                   setAutoTranscribe(checked);
                   localStorage.setItem("autoTranscribe", checked.toString());
@@ -418,7 +450,7 @@ const App: React.FC = () => {
                 }} />
               </div>
               <div className="control-row">
-                <label>Auto-copy single transcript:</label>
+                <label>Auto-copy one-file transcript:</label>
                 <Switch checked={autoCopyToClipboard} onChange={(checked: boolean) => {
                   setAutoCopyToClipboard(checked);
                   localStorage.setItem("autoCopyToClipboard", checked.toString());
@@ -443,54 +475,47 @@ const App: React.FC = () => {
               )}
               {selectedApi === "groq" ? (
                 <div className="control-row">
-                  <label>Audio model:</label>
-                  <select className="input-standard" value={groqModel} onChange={handleGroqModelChange}>
-                    {GROQ_AUDIO_MODELS.map(model => (
-                      <option key={model.value} value={model.value}>{model.label}</option>
-                    ))}
-                  </select>
+                  <label>Transcription model:</label>
+                  {renderModelChoice(GROQ_AUDIO_MODELS, groqModel, handleGroqModelChange, "Groq transcription model")}
                 </div>
               ) : (
                 <div className="control-row">
-                  <label>Audio model:</label>
-                  <select className="input-standard" value={openaiModel} onChange={handleOpenaiModelChange}>
-                    {OPENAI_AUDIO_MODELS.map(model => (
-                      <option key={model.value} value={model.value}>{model.label}</option>
-                    ))}
-                  </select>
+                  <label>Transcription model:</label>
+                  {renderModelChoice(OPENAI_AUDIO_MODELS, openaiModel, handleOpenaiModelChange, "OpenAI transcription model")}
                 </div>
               )}
               <div className="control-row">
-                <label>Sample rate:</label>
-                <select className="input-standard" value={sampleRate} onChange={handleSampleRateChange}>
-                  <option value="8000">8 kHz</option>
-                  <option value="16000">16 kHz</option>
-                  <option value="22050">22.05 kHz</option>
-                  <option value="44100">44.1 kHz</option>
-                  <option value="48000">48 kHz</option>
-                </select>
+                <label>Conversion sample rate:</label>
+                <div className="sample-rate-control">
+                  <input
+                    className="sample-rate-slider"
+                    type="range"
+                    min="0"
+                    max={SAMPLE_RATE_OPTIONS.length - 1}
+                    step="1"
+                    value={selectedSampleRateIndex}
+                    onChange={e => handleSampleRateChange(SAMPLE_RATE_OPTIONS[Number(e.target.value)].value)}
+                    aria-label="Conversion sample rate"
+                    aria-valuetext={SAMPLE_RATE_OPTIONS[selectedSampleRateIndex].label}
+                  />
+                  <div className="sample-rate-stops">
+                    {SAMPLE_RATE_OPTIONS.map((option, index) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={index === selectedSampleRateIndex ? "is-active" : ""}
+                        onClick={() => handleSampleRateChange(option.value)}
+                        aria-pressed={index === selectedSampleRateIndex}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div className="control-row">
-                <label>Segment size (MB):</label>
+                <label>Chunk size (MB):</label>
                 <input className="input-standard" type="number" value={maxFileSizeMB} onChange={handleMaxFileSizeChange} min="1" />
-              </div>
-
-              <div className="settings-separator"><span>AI</span></div>
-              <div className="control-row">
-                <label>AI model:</label>
-                {selectedApi === "openai" ? (
-                  <select className="input-standard" value={openAiChatModel} onChange={handleOpenAiChatModelChange}>
-                    {OPENAI_CHAT_MODELS.map(model => (
-                      <option key={model.value} value={model.value}>{model.label}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <select className="input-standard" value={groqChatModel} onChange={handleGroqChatModelChange}>
-                    {GROQ_CHAT_MODELS.map(model => (
-                      <option key={model.value} value={model.value}>{model.label}</option>
-                    ))}
-                  </select>
-                )}
               </div>
             </div>
           </div>
@@ -498,15 +523,12 @@ const App: React.FC = () => {
 
         {/* File Upload + Voice Recorder */}
         <div className="control-panel add-media-panel">
-          <div className="panel-heading">
-            <h3>Add media</h3>
-          </div>
           <div className="control-row">
             <Upload.Dragger {...uploadProps} style={{ width: "100%" }}>
               <p className="ant-upload-drag-icon"><FileAddOutlined /></p>
-              <p className="ant-upload-text">Drop files here, or click to choose</p>
+              <p className="ant-upload-text">Drop audios or videos here, or click to choose</p>
               <p className="ant-upload-hint">
-                Audio and video files stay in this browser.
+                Files are never uploaded anywhere. Everything is processed locally in this browser.
               </p>
             </Upload.Dragger>
           </div>
@@ -519,7 +541,6 @@ const App: React.FC = () => {
             />
           </div>
         </div>
-
         {/* Job Table */}
         {queue.jobs.length > 0 ? (
           <FileJobTable
@@ -532,7 +553,6 @@ const App: React.FC = () => {
             onStartJob={queue.startJob}
             onRemoveJob={queue.removeJob}
             onRetryJob={queue.retryJob}
-            onUpdateTranscript={queue.updateTranscript}
             onClearCompleted={queue.clearCompleted}
             onCopy={handleCopy}
             onDownload={handleDownload}
@@ -541,42 +561,26 @@ const App: React.FC = () => {
           <div className="job-table job-table-recent">
             <div className="job-table-actions">
               <div className="job-table-stats">
-                <span>Recent transcripts</span>
+                <span>Last transcript from this browser</span>
               </div>
             </div>
             <div className="job-table-rows">
               {recentJobs.map(job => (
-                <FileJobRow
+                <RecentTranscriptRow
                   key={job.id}
                   job={job}
-                  onStart={() => undefined}
                   onRemove={removeRecentTranscription}
-                  onRetry={() => undefined}
-                  onUpdateTranscript={updateRecentTranscript}
                   onCopy={handleCopy}
                   onDownload={handleDownload}
                 />
               ))}
             </div>
           </div>
-        ) : (
-          <div className="job-table job-table-empty">
-            <FileJobRow
-              job={PLACEHOLDER_TRANSCRIPT_JOB}
-              onStart={() => undefined}
-              onRemove={() => undefined}
-              onRetry={() => undefined}
-              onUpdateTranscript={() => undefined}
-              onCopy={() => undefined}
-              onDownload={() => undefined}
-            />
-          </div>
-        )}
+        ) : null}
 
         {/* Batch LLM Panel */}
         <BatchLLMPanel
           jobs={queue.jobs}
-          apiConfig={apiConfigRef.current!}
           selectedApi={selectedApi}
           groqKey={groqKey}
           openaiKey={openaiKey}
@@ -593,7 +597,7 @@ const App: React.FC = () => {
         {/* Log Console Toggle */}
         <div className="utility-toggle-row">
           <button className="settings-toggle" onClick={() => setShowLogConsole(prev => !prev)}>
-            <ProfileOutlined />
+            <LuClipboardList />
             <span>{showLogConsole ? "Hide processing log" : "Processing log"}</span>
           </button>
         </div>

@@ -2,17 +2,16 @@
 import React, { useState } from 'react';
 import { LoadingOutlined } from '@ant-design/icons';
 import { FaCopy, FaFileDownload } from 'react-icons/fa';
+import { TbFileTextAi } from 'react-icons/tb';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
-import { Tag } from 'antd';
 import CollapsibleLLMOutput, { CollapsibleLLMOutputRef } from './CollapsibleLLMOutput';
 import { usePromptGallery } from '../hooks/usePromptGallery';
 import { GROQ_CHAT_MODELS, OPENAI_CHAT_MODELS } from '../modelOptions';
-import type { FileJob, ApiConfig } from '../types';
+import type { FileJob } from '../types';
 
 interface BatchLLMPanelProps {
   jobs: FileJob[];
-  apiConfig: ApiConfig;
   selectedApi: 'groq' | 'openai';
   groqKey: string;
   openaiKey: string;
@@ -25,6 +24,8 @@ interface BatchLLMPanelProps {
   onCopy: (text: string) => void;
   onDownload: (text: string, fileName: string) => void;
 }
+
+const DEFAULT_INSTRUCTION = 'Summarize this transcript with the key points, decisions, and action items.';
 
 const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   jobs,
@@ -41,8 +42,9 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   onDownload,
 }) => {
   const completedJobs = jobs.filter(j => j.status === 'done' && j.transcript);
+  const aiResultJobs = completedJobs.filter(j => j.llmResult);
 
-  const [systemPrompt, setSystemPrompt] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_INSTRUCTION);
   const [mode, setMode] = useState<'per-file' | 'combined'>('per-file');
   const [isGenerating, setIsGenerating] = useState(false);
   const [combinedResult, setCombinedResult] = useState('');
@@ -122,111 +124,170 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
     }
   };
 
+  const getAllAiOutput = () => {
+    if (mode === 'combined') {
+      return (llmOutputRef.current?.getFilteredContent() || combinedResult).trim();
+    }
+
+    return aiResultJobs
+      .map(job => `=== ${job.fileName} ===\n\n${job.llmResult}`)
+      .join('\n\n---\n\n')
+      .trim();
+  };
+
+  const handleCopyAllAiOutput = () => {
+    const output = getAllAiOutput();
+    if (output) onCopy(output);
+  };
+
+  const handleDownloadAllAiOutput = () => {
+    const output = getAllAiOutput();
+    if (!output) return;
+
+    const date = new Date().toISOString().slice(0, 10);
+    onDownload(output, mode === 'combined' ? 'combined-ai-output.txt' : `ai-outputs-${date}.txt`);
+  };
+
+  const hasVisibleAiOutput = mode === 'combined' ? Boolean(combinedResult) : aiResultJobs.length > 0;
+  const chatModelOptions = selectedApi === 'openai' ? OPENAI_CHAT_MODELS : GROQ_CHAT_MODELS;
+  const chatModelValue = selectedApi === 'openai' ? openAiChatModel : groqChatModel;
+  const handleChatModelChange = selectedApi === 'openai' ? onOpenAiChatModelChange : onGroqChatModelChange;
+
   if (completedJobs.length === 0) return null;
 
   return (
     <div className="llm-panel">
       <div className="llm-panel-header">
         <div className="llm-panel-title">
-          <h3>AI actions</h3>
+          <h3>Transform transcripts</h3>
         </div>
-        <div className="llm-panel-controls">
-          <div className="model-selector">
-            <label>AI model:</label>
-            {selectedApi === 'openai' ? (
-              <select
-                className="input-standard"
-                value={openAiChatModel}
-                onChange={e => onOpenAiChatModelChange(e.target.value)}
-              >
-                {OPENAI_CHAT_MODELS.map(model => (
-                  <option key={model.value} value={model.value}>{model.label}</option>
-                ))}
-              </select>
-            ) : (
-              <select
-                className="input-standard"
-                value={groqChatModel}
-                onChange={e => onGroqChatModelChange(e.target.value)}
-              >
-                {GROQ_CHAT_MODELS.map(model => (
-                  <option key={model.value} value={model.value}>{model.label}</option>
-                ))}
-              </select>
-            )}
+        <div className="llm-panel-controls" aria-label="Transform options">
+          <div className="llm-option">
+            <span className="llm-option-label">Model</span>
+            <div className="segmented-control model-choice-control model-choice-control-panel" role="radiogroup" aria-label="Text AI model">
+              {chatModelOptions.map(model => (
+                <button
+                  key={model.value}
+                  type="button"
+                  className={chatModelValue === model.value ? 'is-active' : ''}
+                  onClick={() => handleChatModelChange(model.value)}
+                  aria-pressed={chatModelValue === model.value}
+                >
+                  {model.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="model-selector">
-            <label>Apply to:</label>
-            <select
-              className="input-standard"
-              value={mode}
-              onChange={e => setMode(e.target.value as 'per-file' | 'combined')}
-            >
-              <option value="per-file">Each transcript ({completedJobs.length})</option>
-              <option value="combined">Combined transcript</option>
-            </select>
+          <div className="llm-option">
+            <span className="llm-option-label">Input</span>
+            <div className="segmented-control segmented-control-compact" role="radiogroup" aria-label="Use transcript as">
+              <button
+                type="button"
+                className={mode === 'per-file' ? 'is-active' : ''}
+                onClick={() => setMode('per-file')}
+                aria-pressed={mode === 'per-file'}
+              >
+                Separate files ({completedJobs.length})
+              </button>
+              <button
+                type="button"
+                className={mode === 'combined' ? 'is-active' : ''}
+                onClick={() => setMode('combined')}
+                aria-pressed={mode === 'combined'}
+              >
+                One combined text
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Prompt Gallery */}
-      <div className="prompt-gallery-section">
-        <label className="section-label">Saved instructions</label>
-        <div className="prompt-gallery">
+      <div className="llm-compose">
+        <div className="prompt-gallery" aria-label="Saved instructions">
           {prompts.map(prompt => (
-            <Tag
+            <div
               key={prompt.text}
-              closable={prompt.custom}
-              onClose={prompt.custom ? event => {
-                event.preventDefault();
-                event.stopPropagation();
-                removeCustomPrompt(prompt.text);
-              } : undefined}
-              onClick={() => {
-                setSystemPrompt(prompt.text);
-                updatePromptUsage(prompt.text);
-              }}
-              className="prompt-tag"
+              className={`prompt-chip ${systemPrompt.trim() === prompt.text ? 'is-active' : ''}`}
             >
-              <span>{prompt.text}</span>
-            </Tag>
+              <button
+                type="button"
+                className="prompt-chip-button"
+                onClick={() => {
+                  setSystemPrompt(prompt.text);
+                  updatePromptUsage(prompt.text);
+                }}
+              >
+                {prompt.text}
+              </button>
+              {prompt.custom && (
+                <button
+                  type="button"
+                  className="prompt-chip-remove"
+                  onClick={() => removeCustomPrompt(prompt.text)}
+                  aria-label={`Remove saved instruction: ${prompt.text}`}
+                >
+                  x
+                </button>
+              )}
+            </div>
           ))}
         </div>
-      </div>
 
-      {/* System Prompt */}
-      <div className="system-prompt-section">
-        <label className="section-label">Instruction</label>
         <textarea
           className="system-prompt-input"
           value={systemPrompt}
           onChange={e => setSystemPrompt(e.target.value)}
-          placeholder="Summarize into bullet points and list action items."
+          aria-label="Instruction for the AI"
+          placeholder="Tell the AI what to do with the transcript."
         />
         <button
-          className="btn-standard"
+          className="btn-standard btn-primary-action llm-run-button"
           onClick={handleProcess}
           disabled={isGenerating}
         >
           {isGenerating ? (
-            <><LoadingOutlined /> Running AI...</>
+            <><LoadingOutlined /> Transforming transcripts...</>
           ) : (
-            mode === 'per-file'
-              ? `Run AI on ${completedJobs.length} transcript${completedJobs.length === 1 ? '' : 's'}`
-              : 'Run AI on combined transcript'
+            <>
+              <TbFileTextAi />
+              {mode === 'per-file'
+                ? `Transform ${completedJobs.length} transcript${completedJobs.length === 1 ? '' : 's'} separately`
+                : 'Transform combined transcript'}
+            </>
           )}
         </button>
       </div>
 
+      {hasVisibleAiOutput && (
+        <div className="ai-output-actions">
+          <div className="ai-output-actions-label">
+            <span>AI output</span>
+            <small>
+              {mode === 'combined'
+                ? 'Combined result'
+                : `${aiResultJobs.length} result${aiResultJobs.length === 1 ? '' : 's'}`}
+            </small>
+          </div>
+          <div className="ai-output-actions-buttons">
+            <button className="btn-standard" onClick={handleCopyAllAiOutput}>
+              <FaCopy /> Copy all AI output
+            </button>
+            <button className="btn-standard" onClick={handleDownloadAllAiOutput}>
+              <FaFileDownload /> Download all AI output
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Per-file LLM results */}
-      {mode === 'per-file' && completedJobs.some(j => j.llmResult) && (
+      {mode === 'per-file' && aiResultJobs.length > 0 && (
         <div style={{ marginTop: '1rem' }}>
-          {completedJobs.filter(j => j.llmResult).map(job => (
+          {aiResultJobs.map(job => (
             <div key={job.id} className="transcript-section" style={{ marginTop: '1rem' }}>
               <div className="transcript-header">
-                <h3>AI result - {job.fileName}</h3>
+                <h3>AI output for {job.fileName}</h3>
                 <div>
-                  <button className="transcript-icon" onClick={() => onCopy(job.llmResult!)} title="Copy AI result to clipboard" aria-label={`Copy AI result for ${job.fileName}`}>
+                  <button className="transcript-icon" onClick={() => onCopy(job.llmResult!)} title="Copy AI output" aria-label={`Copy AI output for ${job.fileName}`}>
                     <FaCopy />
                   </button>
                   <button
@@ -235,8 +296,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
                       const baseName = job.fileName.replace(/\.[^.]+$/, '');
                       onDownload(job.llmResult!, `${baseName}-llm-output.txt`);
                     }}
-                    title="Download AI result as a text file"
-                    aria-label={`Download AI result for ${job.fileName}`}
+                    title="Download AI output"
+                    aria-label={`Download AI output for ${job.fileName}`}
                   >
                     <FaFileDownload />
                   </button>
@@ -254,31 +315,7 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
       {mode === 'combined' && combinedResult && (
         <div className="transcript-section" style={{ marginTop: '1rem' }}>
           <div className="transcript-header">
-            <h3>AI result - combined transcripts</h3>
-            <div>
-              <button
-                className="transcript-icon"
-                onClick={() => {
-                  const filtered = llmOutputRef.current?.getFilteredContent() || combinedResult;
-                  onCopy(filtered);
-                }}
-                title="Copy combined AI result to clipboard"
-                aria-label="Copy combined AI result to clipboard"
-              >
-                <FaCopy />
-              </button>
-              <button
-                className="transcript-icon"
-                onClick={() => {
-                  const filtered = llmOutputRef.current?.getFilteredContent() || combinedResult;
-                  onDownload(filtered, 'combined-llm-output.txt');
-                }}
-                title="Download combined AI result as a text file"
-                aria-label="Download combined AI result as a text file"
-              >
-                <FaFileDownload />
-              </button>
-            </div>
+            <h3>AI output for combined transcript</h3>
           </div>
           <div className="transcript-output">
             <CollapsibleLLMOutput ref={llmOutputRef} content={combinedResult} />

@@ -12,6 +12,11 @@ const CUSTOM_PROMPTS_KEY = 'customPrompts';
 const PROMPT_USAGE_KEY = 'promptUsage';
 
 type PromptUsage = Record<string, { useCount: number; lastUsed: number }>;
+type DefaultPromptItem = {
+  text: string;
+  useCount?: number;
+  lastUsed?: number;
+};
 
 const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
 const promptKey = (text: string) => normalizePrompt(text).toLowerCase();
@@ -53,7 +58,7 @@ export function usePromptGallery() {
   const combinedPrompts = useMemo(() => {
     const prompts = [
       ...customPrompts,
-      ...defaultPrompts.map(p => ({ ...p, custom: false })),
+      ...(defaultPrompts as DefaultPromptItem[]).map(p => ({ ...p, custom: false })),
     ];
 
     return prompts

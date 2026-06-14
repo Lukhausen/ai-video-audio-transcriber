@@ -7,6 +7,7 @@ export interface SegmentInfo {
 }
 
 export type FileJobStatus =
+  | 'ready'
   | 'queued'
   | 'converting'
   | 'splitting'

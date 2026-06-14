@@ -1,6 +1,8 @@
 // Sticky progress bar shown during batch processing
 import React from 'react';
-import { LoadingOutlined, CheckCircleOutlined, PauseCircleOutlined } from '@ant-design/icons';
+import { LoadingOutlined } from '@ant-design/icons';
+import { RiCheckboxCircleLine } from 'react-icons/ri';
+import { TbPlayerPauseFilled } from 'react-icons/tb';
 
 interface StickyProgressProps {
   completedCount: number;
@@ -31,15 +33,15 @@ const StickyProgress: React.FC<StickyProgressProps> = ({
       <div className="sticky-progress-info">
         <span className="sticky-progress-status">
           {allDone ? (
-            <><CheckCircleOutlined style={{ color: 'var(--color-accent)' }} /> All done!</>
+            <><RiCheckboxCircleLine style={{ color: 'var(--color-accent)' }} /> All transcripts ready</>
           ) : globalStatus === 'paused' ? (
-            <><PauseCircleOutlined style={{ color: '#faad14' }} /> Paused</>
+            <><TbPlayerPauseFilled style={{ color: '#faad14' }} /> Transcription paused</>
           ) : (
-            <><LoadingOutlined /> Processing...</>
+            <><LoadingOutlined /> Transcribing files...</>
           )}
         </span>
         <span className="sticky-progress-count">
-          {completedCount}/{totalCount} files
+          {completedCount}/{totalCount} complete
           {currentFileName && !allDone && (
             <span className="sticky-progress-current"> · {currentFileName}</span>
           )}

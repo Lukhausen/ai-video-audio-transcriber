@@ -1,14 +1,14 @@
 [
   {
-    "text": "Clean up this transcript into a clear summary with key points, decisions, and action items.",
+    "text": "Summarize this transcript with the key points, decisions, and action items.",
     "custom": false
   },
   {
-    "text": "Turn this transcript into concise meeting notes with decisions, owners, deadlines, and next steps.",
+    "text": "Turn this transcript into meeting notes with decisions, owners, deadlines, and next steps.",
     "custom": false
   },
   {
-    "text": "Rewrite this transcript into polished text while keeping the original meaning and structure.",
+    "text": "Rewrite this transcript into polished text without changing the meaning.",
     "custom": false
   }
 ] 

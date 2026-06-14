@@ -13,6 +13,7 @@ type QueueAction =
   | { type: 'ADD_FILES'; jobs: FileJob[] }
   | { type: 'REMOVE_JOB'; id: string }
   | { type: 'UPDATE_JOB'; id: string; updates: Partial<FileJob> }
+  | { type: 'QUEUE_READY' }
   | { type: 'CLEAR_COMPLETED' }
   | { type: 'SET_GLOBAL'; status: 'idle' | 'processing' | 'paused' };
 
@@ -37,6 +38,13 @@ function queueReducer(state: QueueState, action: QueueAction): QueueState {
         ...state,
         jobs: state.jobs.map(j =>
           j.id === action.id ? { ...j, ...action.updates } : j
+        ),
+      };
+    case 'QUEUE_READY':
+      return {
+        ...state,
+        jobs: state.jobs.map(j =>
+          j.status === 'ready' ? { ...j, status: 'queued' } : j
         ),
       };
     case 'CLEAR_COMPLETED':
@@ -158,13 +166,13 @@ export function useTranscriptionQueue(config: QueueConfig) {
         fileName: file.name,
         fileSize: file.size,
         mimeType: file.type,
-        status: 'queued',
+        status: 'ready',
         progress: 0,
         addedAt: Date.now(),
       };
       newJobs.push(job);
       binaryRef.current.set(id, { file });
-      onLog(`Added "${file.name}" to queue.`, 'info');
+      onLog(`Added "${file.name}".`, 'info');
     }
 
     if (newJobs.length > 0) {
@@ -447,6 +455,10 @@ export function useTranscriptionQueue(config: QueueConfig) {
   const startAll = useCallback(async () => {
     pausedRef.current = false;
     claimedJobsRef.current.clear();
+    jobsRef.current = jobsRef.current.map(j =>
+      j.status === 'ready' ? { ...j, status: 'queued' } : j
+    );
+    dispatch({ type: 'QUEUE_READY' });
     dispatch({ type: 'SET_GLOBAL', status: 'processing' });
 
     // Launch multiple processing loops (one per FFmpeg pool slot)

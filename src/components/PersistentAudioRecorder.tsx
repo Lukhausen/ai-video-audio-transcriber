@@ -1,13 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AudioOutlined,
-  DeleteOutlined,
-  FileTextOutlined,
   LoadingOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  StopOutlined,
 } from '@ant-design/icons';
+import { BiSolidTrashAlt } from 'react-icons/bi';
+import { TbFileTextAi, TbPlayerPauseFilled, TbPlayerPlayFilled, TbPlayerStopFilled } from 'react-icons/tb';
 import {
   CachedRecording,
   deleteCachedRecording,
@@ -67,29 +64,37 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
   const [draftRecording, setDraftRecording] = useState<CachedRecording | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
+  const [showRecoveredNotice, setShowRecoveredNotice] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const activeRecordingRef = useRef<CachedRecording | null>(null);
   const startedAtRef = useRef(0);
   const timerRef = useRef<number | undefined>();
+  const animationFrameRef = useRef<number | undefined>();
   const previewUrl = useMemo(() => (
     draftRecording?.blob ? URL.createObjectURL(draftRecording.blob) : ''
   ), [draftRecording]);
 
-  const refreshRecordings = async () => {
+  const refreshRecordings = async (highlightRecovered = false) => {
     const draft = await getDraftRecording();
     setDraftRecording(draft);
+    if (highlightRecovered && draft) {
+      setShowRecoveredNotice(true);
+    }
   };
 
   useEffect(() => {
-    refreshRecordings().catch(() => undefined);
+    refreshRecordings(true).catch(() => undefined);
 
     return () => {
       window.clearInterval(timerRef.current);
+      window.cancelAnimationFrame(animationFrameRef.current || 0);
       streamRef.current?.getTracks().forEach(track => track.stop());
       audioContextRef.current?.close();
     };
@@ -127,6 +132,54 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
     await refreshRecordings();
   };
 
+  const startWaveform = (analyser: AnalyserNode) => {
+    const canvas = waveformCanvasRef.current;
+    if (!canvas) return;
+
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    const buffer = new Uint8Array(analyser.fftSize);
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * scale));
+      const height = Math.max(1, Math.round(rect.height * scale));
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      analyser.getByteTimeDomainData(buffer);
+      context.clearRect(0, 0, width, height);
+      context.strokeStyle = 'rgba(94, 170, 40, 0.95)';
+      context.lineWidth = Math.max(2, scale * 1.8);
+      context.beginPath();
+
+      const sliceWidth = width / buffer.length;
+      const centerY = height / 2;
+      const amplitude = height * 1.25;
+      for (let i = 0; i < buffer.length; i += 1) {
+        const x = i * sliceWidth;
+        const normalized = (buffer[i] - 128) / 128;
+        const y = Math.min(height - scale, Math.max(scale, centerY + normalized * amplitude));
+        if (i === 0) {
+          context.moveTo(x, y);
+        } else {
+          context.lineTo(x, y);
+        }
+      }
+
+      context.stroke();
+      animationFrameRef.current = window.requestAnimationFrame(draw);
+    };
+
+    window.cancelAnimationFrame(animationFrameRef.current || 0);
+    draw();
+  };
+
   const startRecording = async () => {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       onLog('Recording is not supported in this browser.', 'error');
@@ -152,10 +205,12 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioContextCtor();
       const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
       const highPass = audioContext.createBiquadFilter();
       const compressor = audioContext.createDynamicsCompressor();
       const destination = audioContext.createMediaStreamDestination();
 
+      analyser.fftSize = 512;
       highPass.type = 'highpass';
       highPass.frequency.value = 80;
       compressor.threshold.value = -32;
@@ -164,6 +219,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       compressor.attack.value = 0.003;
       compressor.release.value = 0.25;
 
+      source.connect(analyser);
       source.connect(highPass);
       highPass.connect(compressor);
       compressor.connect(destination);
@@ -172,6 +228,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
 
       streamRef.current = stream;
       audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       startedAtRef.current = createdAt;
@@ -214,6 +271,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
           streamRef.current = null;
           audioContextRef.current?.close();
           audioContextRef.current = null;
+          analyserRef.current = null;
+          window.cancelAnimationFrame(animationFrameRef.current || 0);
           window.clearInterval(timerRef.current);
         }
       };
@@ -221,10 +280,17 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       recorder.start(1000);
       setElapsedMs(0);
       setIsRecording(true);
+      startWaveform(analyser);
       timerRef.current = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAtRef.current);
       }, 250);
     } catch (err: any) {
+      window.cancelAnimationFrame(animationFrameRef.current || 0);
+      analyserRef.current = null;
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
       onLog(`Could not start recording: ${err.message}`, 'error');
     } finally {
       setIsLoading(false);
@@ -248,6 +314,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
     const audio = previewAudioRef.current;
     if (!audio) return;
 
+    setShowRecoveredNotice(false);
+
     if (isPreviewPlaying) {
       audio.pause();
       return;
@@ -262,6 +330,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
 
   const loadRecording = (recording: CachedRecording, shouldTranscribeNow = false) => {
     stopPreview();
+    setShowRecoveredNotice(false);
     onRecordingReady(fileFromRecording(recording), shouldTranscribeNow);
     setDraftRecording(undefined);
     onLog(`Loaded recording "${recording.fileName}".`, 'info');
@@ -269,61 +338,80 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
 
   const deleteRecording = async (id: string) => {
     stopPreview();
+    setShowRecoveredNotice(false);
     await deleteCachedRecording(id);
     await refreshRecordings();
   };
 
   return (
-    <div className="persistent-recorder">
-      <div className="persistent-recorder-controls">
-        {isRecording ? (
-          <button className="btn-standard" onClick={stopRecording}>
-            <StopOutlined /> Stop recording
-          </button>
-        ) : (
-          <button className="btn-standard" onClick={startRecording} disabled={isLoading}>
-            {isLoading ? <LoadingOutlined /> : <AudioOutlined />}
-            Record audio
-          </button>
-        )}
-        <span className="persistent-recorder-time">{formatRecordingTime(elapsedMs)}</span>
-      </div>
+    <div className={`persistent-recorder ${!isRecording && draftRecording ? 'has-recovered-recording' : ''}`}>
+      <button
+        className={`voice-recorder-control ${isRecording ? 'is-recording' : ''}`}
+        onClick={isRecording ? stopRecording : startRecording}
+        disabled={isLoading}
+        type="button"
+        aria-label={isRecording ? 'Stop recording and add audio to the file list' : 'Record audio'}
+      >
+        <span className="voice-recorder-action">
+          {isRecording ? <TbPlayerStopFilled /> : isLoading ? <LoadingOutlined /> : <AudioOutlined />}
+        </span>
+        <span className="voice-recorder-copy">
+          <span className="voice-recorder-title">
+            {isRecording ? 'Stop recording' : 'Record audio'}
+          </span>
+          <span className="voice-recorder-meta">
+            {isRecording ? 'Recording now' : 'Saved locally'}
+          </span>
+        </span>
+        <span className="voice-recorder-monitor" aria-hidden="true">
+          <span className="persistent-recorder-time">{formatRecordingTime(elapsedMs)}</span>
+          <canvas
+            ref={waveformCanvasRef}
+            className={`mic-waveform ${isRecording ? 'is-active' : ''}`}
+          />
+        </span>
+      </button>
 
       {!isRecording && draftRecording && (
-        <div className="recent-recordings">
-          <div className="recent-recording recent-recording-draft">
-            <span>
-              Recovered recording
-              <small>{formatRecordingTime(draftRecording.durationMs)}</small>
-            </span>
-            <div>
-              <audio
-                ref={previewAudioRef}
-                src={previewUrl}
-                onPlay={() => setIsPreviewPlaying(true)}
-                onPause={() => setIsPreviewPlaying(false)}
-                onEnded={() => setIsPreviewPlaying(false)}
-              />
-              <button
-                className="transcript-icon"
-                onClick={togglePreview}
-                title={isPreviewPlaying ? "Pause recovered recording preview" : "Play recovered recording preview"}
-                aria-label={isPreviewPlaying ? "Pause recovered recording preview" : "Play recovered recording preview"}
-              >
-                {isPreviewPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-              </button>
-              <button
-                className="transcript-icon recent-recording-add"
-                onClick={() => loadRecording(draftRecording, true)}
-                title="Transcribe recovered recording"
-                aria-label="Transcribe recovered recording"
-              >
-                <FileTextOutlined />
-              </button>
-              <button className="transcript-icon transcript-icon-danger" onClick={() => deleteRecording(draftRecording.id)} title="Delete recovered recording">
-                <DeleteOutlined />
-              </button>
-            </div>
+        <div
+          className={`recovered-recorder-card ${showRecoveredNotice ? 'recovered-recorder-card-attention' : ''}`}
+          role={showRecoveredNotice ? 'status' : undefined}
+          aria-live={showRecoveredNotice ? 'polite' : undefined}
+          aria-label="Recording recovered. Restore it to the file list or transcribe it now."
+        >
+          <span className="recovered-recorder-title">
+            {showRecoveredNotice && <span className="recovered-recording-pulse" aria-hidden="true" />}
+            Recording Recovered
+          </span>
+          <div className="recovered-recorder-actions">
+            <audio
+              ref={previewAudioRef}
+              src={previewUrl}
+              onPlay={() => setIsPreviewPlaying(true)}
+              onPause={() => setIsPreviewPlaying(false)}
+              onEnded={() => setIsPreviewPlaying(false)}
+            />
+            <button
+              type="button"
+              className="transcript-icon"
+              onClick={togglePreview}
+              title={isPreviewPlaying ? "Pause recovered audio" : "Play recovered audio"}
+              aria-label={isPreviewPlaying ? "Pause recovered audio" : "Play recovered audio"}
+            >
+              {isPreviewPlaying ? <TbPlayerPauseFilled /> : <TbPlayerPlayFilled />}
+            </button>
+            <button
+              type="button"
+              className="transcript-icon recovered-recorder-transcribe"
+              onClick={() => loadRecording(draftRecording, true)}
+              title="Transcribe recovered recording now"
+              aria-label="Transcribe recovered recording now"
+            >
+              <TbFileTextAi />
+            </button>
+            <button type="button" className="transcript-icon transcript-icon-danger" onClick={() => deleteRecording(draftRecording.id)} title="Delete recovered recording">
+              <BiSolidTrashAlt />
+            </button>
           </div>
         </div>
       )}
