@@ -588,8 +588,8 @@ const App: React.FC = () => {
                 {selectedProviderLabel} API key:
                 <a className="api-key-create-link" href={API_KEY_URLS[selectedApi]}
                   target="_blank" rel="noopener noreferrer"
-                  title={`Create a ${selectedProviderLabel} API key`}
-                  aria-label={`Create a ${selectedProviderLabel} API key (opens in a new tab)`}>
+                  title={`Create ${selectedProviderLabel} API key`}
+                  aria-label={`Create ${selectedProviderLabel} API key (opens in a new tab)`}>
                   <LuExternalLink aria-hidden="true" />
                 </a>
               </label>
