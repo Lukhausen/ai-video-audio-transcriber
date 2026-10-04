@@ -388,11 +388,12 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
           className={`recovered-recorder-card ${showRecoveredNotice ? 'recovered-recorder-card-attention' : ''}`}
           role={showRecoveredNotice ? 'status' : undefined}
           aria-live={showRecoveredNotice ? 'polite' : undefined}
-          aria-label="Recording recovered. Play it, transcribe it now, or delete it."
+          aria-label={`Recording recovered, ${formatRecordingTime(draftRecording.durationMs)} long. Play it, transcribe it now, or delete it.`}
         >
           <span className="recovered-recorder-title">
             {showRecoveredNotice && <span className="recovered-recording-pulse" aria-hidden="true" />}
             Recording recovered
+            <span className="persistent-recorder-time">{formatRecordingTime(draftRecording.durationMs)}</span>
           </span>
           <div className="recovered-recorder-actions">
             <audio
