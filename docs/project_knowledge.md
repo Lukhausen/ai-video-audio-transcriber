@@ -5,6 +5,7 @@
 
 - Google transcription uses `gemini-3.5-transcribe` as its default; Google provider selection also supports transcript transformations using current Gemini text models.
 - Default to Google for first-time visitors and show the provider switch in Google, Groq, OpenAI order; preserve valid saved provider choices.
+- When the selected provider has no saved API key, show a link icon beside its API-key label that opens that provider's key-creation page in a new tab.
 
 - Place timestamps and speaker-label switches beside Download transcripts and Clear transcribed files; collect supported metadata once, then update displayed, copied, and downloaded text locally without repeating transcription.
 - Show timestamp and speaker switches only in the recent-transcript top bar; they also update expanded transcripts without collapsing them.

@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 // Ant Design components and icons
 import { ConfigProvider, theme, Upload, Switch } from "antd";
 import { FileAddOutlined, GithubOutlined } from "@ant-design/icons";
-import { LuClipboardList, LuEye, LuEyeOff, LuSettings2 } from "react-icons/lu";
+import { LuClipboardList, LuExternalLink, LuEye, LuEyeOff, LuSettings2 } from "react-icons/lu";
 import { SiGoogle } from "react-icons/si";
 import type { UploadProps } from "antd/es/upload";
 
@@ -38,6 +38,11 @@ import type { LogMessage, ApiConfig, FileJob, ApiProvider, TranscriptCue, Transc
 const RECENT_TRANSCRIPTS_KEY = "recentTranscriptions";
 const RECENT_TRANSCRIPTS_LIMIT = 3;
 const API_PROVIDERS: ApiProvider[] = ["google", "groq", "openai"];
+const API_KEY_URLS: Record<ApiProvider, string> = {
+  google: "https://aistudio.google.com/api-keys",
+  groq: "https://console.groq.com/keys",
+  openai: "https://platform.openai.com/api-keys",
+};
 const SAMPLE_RATE_OPTIONS = [
   { value: 8000, label: "8 kHz" },
   { value: 16000, label: "16 kHz" },
@@ -579,7 +584,15 @@ const App: React.FC = () => {
 
           {!selectedProviderKey ? (
             <div className="setup-field-row">
-              <label className="setup-field-label">{selectedProviderLabel} API key:</label>
+              <label className="setup-field-label setup-api-key-label">
+                {selectedProviderLabel} API key:
+                <a className="api-key-create-link" href={API_KEY_URLS[selectedApi]}
+                  target="_blank" rel="noopener noreferrer"
+                  title={`Create a ${selectedProviderLabel} API key`}
+                  aria-label={`Create a ${selectedProviderLabel} API key (opens in a new tab)`}>
+                  <LuExternalLink aria-hidden="true" />
+                </a>
+              </label>
               <div className="setup-field-control">
                 {renderSelectedProviderKeyInput()}
               </div>

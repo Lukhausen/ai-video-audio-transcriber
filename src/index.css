@@ -239,6 +239,29 @@ body,
   min-width: 0;
 }
 
+.setup-api-key-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.api-key-create-link {
+  display: inline-flex;
+  padding: 0.25rem;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+}
+
+.api-key-create-link:hover {
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.api-key-create-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 .setup-field-control .input-standard {
   width: 100%;
 }
