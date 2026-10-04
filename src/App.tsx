@@ -1,10 +1,11 @@
 // App.tsx — Multi-file transcription with parallel processing
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 
 // Ant Design components and icons
 import { ConfigProvider, theme, Upload, Switch } from "antd";
 import { FileAddOutlined, GithubOutlined } from "@ant-design/icons";
-import { LuClipboardList, LuSettings2 } from "react-icons/lu";
+import { LuClipboardList, LuEye, LuEyeOff, LuSettings2 } from "react-icons/lu";
+import { SiGoogle } from "react-icons/si";
 import type { UploadProps } from "antd/es/upload";
 
 // Toast notifications
@@ -18,19 +19,25 @@ import StickyProgress from "./components/StickyProgress";
 import FileJobTable from "./components/FileJobTable";
 import PersistentAudioRecorder from "./components/PersistentAudioRecorder";
 import BatchLLMPanel from "./components/BatchLLMPanel";
+import TranscriptOutputOptions from "./components/TranscriptOutputOptions";
+import { formatTranscript } from "./transcripts/output";
 import RecentTranscriptRow from "./components/RecentTranscriptRow";
 import {
   getStoredModel,
+  GOOGLE_AUDIO_MODELS,
+  GOOGLE_CHAT_MODELS,
   GROQ_AUDIO_MODELS,
   GROQ_CHAT_MODELS,
   OPENAI_AUDIO_MODELS,
   OPENAI_CHAT_MODELS,
+  type ModelOption,
 } from "./modelOptions";
 
-import type { LogMessage, ApiConfig, FileJob } from "./types";
+import type { LogMessage, ApiConfig, FileJob, ApiProvider, TranscriptCue, TranscriptOutputOptions as OutputOptions } from "./types";
 
 const RECENT_TRANSCRIPTS_KEY = "recentTranscriptions";
 const RECENT_TRANSCRIPTS_LIMIT = 3;
+const API_PROVIDERS: ApiProvider[] = ["google", "groq", "openai"];
 const SAMPLE_RATE_OPTIONS = [
   { value: 8000, label: "8 kHz" },
   { value: 16000, label: "16 kHz" },
@@ -45,6 +52,7 @@ type RecentTranscription = {
   fileSize: number;
   mimeType: string;
   transcript: string;
+  transcriptCues?: TranscriptCue[];
   cachedAt: number;
 };
 
@@ -60,21 +68,42 @@ function loadRecentTranscriptions(): RecentTranscription[] {
 }
 
 function saveRecentTranscriptions(items: RecentTranscription[]) {
-  localStorage.setItem(RECENT_TRANSCRIPTS_KEY, JSON.stringify(items.slice(0, RECENT_TRANSCRIPTS_LIMIT)));
+  const cached = items.slice(0, RECENT_TRANSCRIPTS_LIMIT);
+  if (!cached.length) {
+    localStorage.removeItem(RECENT_TRANSCRIPTS_KEY);
+    return;
+  }
+  // Annotation data can exceed browser storage limits; keep the newest result first.
+  while (cached.length) {
+    try {
+      localStorage.setItem(RECENT_TRANSCRIPTS_KEY, JSON.stringify(cached));
+      return;
+    } catch {
+      if (cached.length > 1) cached.pop();
+      else if (cached[0].transcriptCues) cached[0] = { ...cached[0], transcriptCues: undefined };
+      else break;
+    }
+  }
 }
 
 const App: React.FC = () => {
   // -----------------------------------------------------------------
   // GLOBAL SETTINGS STATE (persisted in localStorage)
   // -----------------------------------------------------------------
-  const [selectedApi, setSelectedApi] = useState<"groq" | "openai">(
-    (localStorage.getItem("selectedApi") as "groq" | "openai") || "groq"
-  );
+  const [selectedApi, setSelectedApi] = useState<ApiProvider>(() => {
+    const stored = localStorage.getItem("selectedApi") as ApiProvider | null;
+    return stored && API_PROVIDERS.includes(stored) ? stored : "google";
+  });
   const [groqKey, setGroqKey] = useState(localStorage.getItem("groqKey") || "");
   const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("openaiKey") || "");
+  const [googleKey, setGoogleKey] = useState(localStorage.getItem("googleKey") || "");
+  const [googleModel, setGoogleModel] = useState(getStoredModel("googleModel", GOOGLE_AUDIO_MODELS));
+  const [googleChatModel, setGoogleChatModel] = useState(getStoredModel("googleChatModel", GOOGLE_CHAT_MODELS));
   const [groqModel, setGroqModel] = useState(getStoredModel("groqModel", GROQ_AUDIO_MODELS));
   const [openaiModel, setOpenaiModel] = useState(getStoredModel("openaiModel", OPENAI_AUDIO_MODELS));
-  const [maxFileSizeMB, setMaxFileSizeMB] = useState(25);
+  const [maxFileSizeMB, setMaxFileSizeMB] = useState(
+    parseFloat(localStorage.getItem("maxFileSizeMB") || "25")
+  );
   const [sampleRate, setSampleRate] = useState(
     parseInt(localStorage.getItem("sampleRate") || "16000", 10)
   );
@@ -84,6 +113,16 @@ const App: React.FC = () => {
   const [groqChatModel, setGroqChatModel] = useState(
     getStoredModel("groqChatModel", GROQ_CHAT_MODELS)
   );
+
+  const [outputOptions, setOutputOptions] = useState<OutputOptions>(() => ({
+    timestamps: localStorage.getItem("showTranscriptTimestamps") === "true",
+    speakers: localStorage.getItem("showTranscriptSpeakers") === "true",
+  }));
+  const handleOutputOptionsChange = (options: OutputOptions) => {
+    setOutputOptions(options);
+    localStorage.setItem("showTranscriptTimestamps", String(options.timestamps));
+    localStorage.setItem("showTranscriptSpeakers", String(options.speakers));
+  };
 
   // Automation settings
   const [autoTranscribe, setAutoTranscribe] = useState(
@@ -96,34 +135,52 @@ const App: React.FC = () => {
   // UI toggles
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showLogConsole, setShowLogConsole] = useState(false);
+  const [showGroqKey, setShowGroqKey] = useState(false);
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
+
+  const [showGoogleKey, setShowGoogleKey] = useState(false);
 
   // Log state
   const [logMessages, setLogMessages] = useState<LogMessage[]>([]);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastConfirmedGroqKeyRef = useRef(groqKey);
+  const lastConfirmedOpenaiKeyRef = useRef(openaiKey);
+  const lastConfirmedGoogleKeyRef = useRef(googleKey);
   const [recentTranscriptions, setRecentTranscriptions] = useState<RecentTranscription[]>(loadRecentTranscriptions);
 
   // -----------------------------------------------------------------
   // API CONFIG REF (read by processing hooks without stale closures)
   // -----------------------------------------------------------------
   const apiConfigRef = useRef<ApiConfig>({
-    selectedApi, groqKey, openaiKey, groqModel, openaiModel, maxFileSizeMB, sampleRate,
+    selectedApi, groqKey, openaiKey, googleKey, groqModel, openaiModel, googleModel, maxFileSizeMB, sampleRate,
   });
   useEffect(() => {
     apiConfigRef.current = {
-      selectedApi, groqKey, openaiKey, groqModel, openaiModel, maxFileSizeMB, sampleRate,
+      selectedApi, groqKey, openaiKey, googleKey, groqModel, openaiModel, googleModel, maxFileSizeMB, sampleRate,
     };
-  }, [selectedApi, groqKey, openaiKey, groqModel, openaiModel, maxFileSizeMB, sampleRate]);
+  }, [selectedApi, groqKey, openaiKey, googleKey, groqModel, openaiModel, googleModel, maxFileSizeMB, sampleRate]);
+
+  // Clear settings left by the removed provider and persist the validated selection.
+  useEffect(() => {
+    for (const key of ["alibabaKey", "alibabaModel", "alibabaChatModel", "temporaryUploadWorkerUrl"]) {
+      localStorage.removeItem(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("selectedApi", selectedApi);
+  }, [selectedApi]);
 
   // -----------------------------------------------------------------
   // LOGGING
   // -----------------------------------------------------------------
-  const appendLog = (msg: string, type: "info" | "error" = "info") => {
+  const appendLog = useCallback((msg: string, type: "info" | "error" = "info") => {
     const timeStamp = new Date().toLocaleTimeString();
     if (type === "error") {
       toast.error(msg);
     }
     setLogMessages(prev => [...prev, { text: `[${timeStamp}] ${msg}`, type, html: true }]);
-  };
+  }, []);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -155,14 +212,44 @@ const App: React.FC = () => {
     appendLog(logMessage, "info");
   };
 
-  const handleApiProviderChange = (provider: "groq" | "openai") => {
+  const handleApiProviderChange = (provider: ApiProvider) => {
     handleApiSettingChange(provider, setSelectedApi, "selectedApi", `Switched API to ${provider}`);
   };
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    handleApiSettingChange(e.target.value, setGroqKey, "groqKey", "Updated Groq API key.");
+    const value = e.target.value;
+    setGroqKey(value);
+    localStorage.setItem("groqKey", value);
   };
   const handleOpenaiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    handleApiSettingChange(e.target.value, setOpenaiKey, "openaiKey", "Updated OpenAI API key.");
+    const value = e.target.value;
+    setOpenaiKey(value);
+    localStorage.setItem("openaiKey", value);
+  };
+  const handleGoogleKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setGoogleKey(value);
+    localStorage.setItem("googleKey", value);
+  };
+  const handleGoogleKeyBlur = () => {
+    if (googleKey === lastConfirmedGoogleKeyRef.current) return;
+    lastConfirmedGoogleKeyRef.current = googleKey;
+    appendLog(googleKey.trim() ? "Google API key saved." : "Google API key cleared.", "info");
+  };
+  const handleGoogleModelChange = (model: string) => {
+    handleApiSettingChange(model, setGoogleModel, "googleModel", `Updated Google model to "${model}".`);
+  };
+  const handleGoogleChatModelValueChange = (model: string) => {
+    handleApiSettingChange(model, setGoogleChatModel, "googleChatModel", `Google Chat Model: "${model}".`);
+  };
+  const handleGroqKeyBlur = () => {
+    if (groqKey === lastConfirmedGroqKeyRef.current) return;
+    lastConfirmedGroqKeyRef.current = groqKey;
+    appendLog(groqKey.trim() ? "Groq API key saved." : "Groq API key cleared.", "info");
+  };
+  const handleOpenaiKeyBlur = () => {
+    if (openaiKey === lastConfirmedOpenaiKeyRef.current) return;
+    lastConfirmedOpenaiKeyRef.current = openaiKey;
+    appendLog(openaiKey.trim() ? "OpenAI API key saved." : "OpenAI API key cleared.", "info");
   };
   const handleGroqModelChange = (model: string) => {
     handleApiSettingChange(model, setGroqModel, "groqModel", `Updated Groq model to "${model}".`);
@@ -172,7 +259,7 @@ const App: React.FC = () => {
   };
   const handleMaxFileSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const n = parseFloat(e.target.value);
-    if (!isNaN(n) && n > 0) handleApiSettingChange(n, setMaxFileSizeMB, "maxFileSizeMB", `Max file size: ${n} MB`);
+    if (!isNaN(n) && n > 0) handleApiSettingChange(n, setMaxFileSizeMB, "maxFileSizeMB", `Large-file chunk size: ${n} MB`);
   };
   const handleSampleRateChange = (rate: number) => {
     handleApiSettingChange(rate, setSampleRate, "sampleRate", `Sample rate: ${rate} Hz`);
@@ -189,7 +276,6 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   const handleRecordingComplete = (file: File, shouldTranscribeNow = false) => {
     queue.addFiles([file]);
-
     if (shouldTranscribeNow || autoTranscribe) {
       // Start immediately after adding
       setTimeout(() => queue.startAll(), 100);
@@ -204,9 +290,9 @@ const App: React.FC = () => {
     multiple: true,
     accept: "audio/*,video/*",
     beforeUpload: (_file: File, fileList: File[]) => {
-      // On the first file of a batch, add all files at once
+      // On the first file of a batch, add all files at once.
       if (fileList[0] === _file) {
-        queue.addFiles(fileList as File[]);
+        queue.addFiles(fileList);
       }
       return false; // Prevent automatic upload
     },
@@ -220,7 +306,7 @@ const App: React.FC = () => {
   const selectedSampleRateIndex = currentSampleRateIndex >= 0 ? currentSampleRateIndex : 1;
 
   const renderModelChoice = (
-    options: { value: string; label: string }[],
+    options: ModelOption[],
     value: string,
     onChange: (model: string) => void,
     ariaLabel: string
@@ -240,20 +326,51 @@ const App: React.FC = () => {
     </div>
   );
 
+  const renderApiKeyInput = (
+    providerName: "Groq" | "OpenAI" | "Google",
+    value: string,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void,
+    onBlur: () => void,
+    isVisible: boolean,
+    onToggleVisibility: () => void
+  ) => (
+    <div className="api-key-input-wrap">
+      <input
+        className="input-standard api-key-input"
+        type={isVisible ? "text" : "password"}
+        value={value}
+        onChange={onChange}
+        onBlur={onBlur}
+        placeholder={`Paste your ${providerName} API key`}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <button
+        type="button"
+        className="api-key-reveal"
+        onClick={onToggleVisibility}
+        title={isVisible ? `Hide ${providerName} API key` : `Show ${providerName} API key`}
+        aria-label={isVisible ? `Hide ${providerName} API key` : `Show ${providerName} API key`}
+      >
+        {isVisible ? <LuEyeOff /> : <LuEye />}
+      </button>
+    </div>
+  );
+
   // -----------------------------------------------------------------
   // COPY / DOWNLOAD UTILITIES
   // -----------------------------------------------------------------
-  const handleCopy = (text: string) => {
+  const handleCopy = useCallback((text: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text.trim()).then(
       () => {
-        toast.success("Copied to clipboard!", { autoClose: 3000, style: { backgroundColor: "#fff", color: "#000" } });
+        toast.success("Copied to clipboard.", { autoClose: 3000 });
       },
       (err) => appendLog(`Error copying: ${err}`, "error")
     );
-  };
+  }, [appendLog]);
 
-  const handleDownload = (text: string, fileName: string) => {
+  const handleDownload = useCallback((text: string, fileName: string) => {
     if (!text) return;
     const blob = new Blob([text.trim()], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -264,8 +381,8 @@ const App: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    toast.success("Download started.", { autoClose: 3000, style: { backgroundColor: "#fff", color: "#000" } });
-  };
+    toast.success("Download started.", { autoClose: 3000 });
+  }, []);
 
   const updateRecentTranscriptions = (updater: (items: RecentTranscription[]) => RecentTranscription[]) => {
     setRecentTranscriptions(prev => {
@@ -296,6 +413,7 @@ const App: React.FC = () => {
           fileSize: job.fileSize,
           mimeType: job.mimeType,
           transcript: job.transcript!,
+          transcriptCues: job.transcriptCues,
           cachedAt: byId.get(job.id)?.cachedAt || Date.now(),
         });
       }
@@ -315,6 +433,7 @@ const App: React.FC = () => {
       status: 'done',
       progress: 100,
       transcript: item.transcript,
+      transcriptCues: item.transcriptCues,
       addedAt: item.cachedAt,
     }))
   ), [recentTranscriptions]);
@@ -331,12 +450,12 @@ const App: React.FC = () => {
       const completedJobs = queue.jobs.filter(j => j.status === 'done' && j.transcript);
       if (completedJobs.length > 0) {
         const lastCompleted = completedJobs[completedJobs.length - 1];
-        handleCopy(lastCompleted.transcript!);
+        handleCopy(formatTranscript(lastCompleted, outputOptions));
         appendLog(`Auto-copied "${lastCompleted.fileName}" transcript.`, "info");
       }
     }
     prevCompletedRef.current = queue.completedCount;
-  }, [queue.completedCount, queue.jobs, autoCopyToClipboard]);
+  }, [queue.completedCount, queue.jobs, autoCopyToClipboard, handleCopy, appendLog, outputOptions]);
 
   // Currently processing file name (for sticky progress)
   const currentProcessingFile = useMemo(() => {
@@ -351,6 +470,46 @@ const App: React.FC = () => {
       .filter(j => j.status === 'done' && j.transcript && j.fileName.startsWith('Recording_'))
       .map(j => j.fileName)
   ), [queue.jobs]);
+
+  const selectedProviderLabel = { groq: "Groq", openai: "OpenAI", google: "Google" }[selectedApi];
+  const selectedProviderKey = { groq: groqKey, openai: openaiKey, google: googleKey }[selectedApi];
+
+  const renderSelectedProviderKeyInput = () => {
+    if (selectedApi === "google") {
+      return renderApiKeyInput("Google", googleKey, handleGoogleKeyChange, handleGoogleKeyBlur,
+        showGoogleKey, () => setShowGoogleKey(visible => !visible));
+    }
+    if (selectedApi === "groq") {
+      return renderApiKeyInput(
+        "Groq",
+        groqKey,
+        handleGroqKeyChange,
+        handleGroqKeyBlur,
+        showGroqKey,
+        () => setShowGroqKey(visible => !visible)
+      );
+    }
+
+    return renderApiKeyInput(
+      "OpenAI",
+      openaiKey,
+      handleOpenaiKeyChange,
+      handleOpenaiKeyBlur,
+      showOpenaiKey,
+      () => setShowOpenaiKey(visible => !visible)
+    );
+  };
+
+  const renderSelectedTranscriptionModel = () => {
+    if (selectedApi === "google") {
+      return renderModelChoice(GOOGLE_AUDIO_MODELS, googleModel, handleGoogleModelChange, "Google transcription model");
+    }
+    if (selectedApi === "groq") {
+      return renderModelChoice(GROQ_AUDIO_MODELS, groqModel, handleGroqModelChange, "Groq transcription model");
+    }
+
+    return renderModelChoice(OPENAI_AUDIO_MODELS, openaiModel, handleOpenaiModelChange, "OpenAI transcription model");
+  };
 
   // -----------------------------------------------------------------
   // RENDER
@@ -385,6 +544,15 @@ const App: React.FC = () => {
               <div className="segmented-control provider-control" role="radiogroup" aria-label="API provider">
                 <button
                   type="button"
+                  className={selectedApi === "google" ? "is-active" : ""}
+                  onClick={() => handleApiProviderChange("google")}
+                  aria-pressed={selectedApi === "google"}
+                  aria-label="Use Google as API provider"
+                >
+                  <span className="provider-google"><SiGoogle aria-hidden="true" /> Google</span>
+                </button>
+                <button
+                  type="button"
                   className={selectedApi === "groq" ? "is-active" : ""}
                   onClick={() => handleApiProviderChange("groq")}
                   aria-pressed={selectedApi === "groq"}
@@ -409,29 +577,18 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {selectedApi === "groq" ? (
-            !groqKey ? (
-              <div className="setup-field-row">
-                <label className="setup-field-label">Groq API key:</label>
-                <div className="setup-field-control">
-                  <input className="input-standard" type="text" value={groqKey} onChange={handleGroqKeyChange} placeholder="Paste your Groq API key" />
-                </div>
-              </div>
-            ) : (
-              <p className="api-key-message setup-field-message">
-                {showAdvanced ? "Groq API key saved." : "Groq API key saved. Change it in advanced settings."}
-              </p>
-            )
-          ) : !openaiKey ? (
+          {!selectedProviderKey ? (
             <div className="setup-field-row">
-              <label className="setup-field-label">OpenAI API key:</label>
+              <label className="setup-field-label">{selectedProviderLabel} API key:</label>
               <div className="setup-field-control">
-                <input className="input-standard" type="text" value={openaiKey} onChange={handleOpenaiKeyChange} placeholder="Paste your OpenAI API key" />
+                {renderSelectedProviderKeyInput()}
               </div>
             </div>
           ) : (
             <p className="api-key-message setup-field-message">
-              {showAdvanced ? "OpenAI API key saved." : "OpenAI API key saved. Change it in advanced settings."}
+              {showAdvanced
+                ? `${selectedProviderLabel} API key saved.`
+                : `${selectedProviderLabel} API key saved. Change it in advanced settings.`}
             </p>
           )}
         </div>
@@ -461,29 +618,16 @@ const App: React.FC = () => {
 
             <div className="settings-group">
               <div className="settings-separator"><span>Transcription</span></div>
-              {selectedApi === "groq" && groqKey && (
+              {selectedProviderKey && (
                 <div className="control-row">
-                  <label>Groq API key:</label>
-                  <input className="input-standard" type="password" value={groqKey} onChange={handleGroqKeyChange} />
+                  <label>{selectedProviderLabel} API key:</label>
+                  {renderSelectedProviderKeyInput()}
                 </div>
               )}
-              {selectedApi === "openai" && openaiKey && (
-                <div className="control-row">
-                  <label>OpenAI API key:</label>
-                  <input className="input-standard" type="password" value={openaiKey} onChange={handleOpenaiKeyChange} />
-                </div>
-              )}
-              {selectedApi === "groq" ? (
-                <div className="control-row">
-                  <label>Transcription model:</label>
-                  {renderModelChoice(GROQ_AUDIO_MODELS, groqModel, handleGroqModelChange, "Groq transcription model")}
-                </div>
-              ) : (
-                <div className="control-row">
-                  <label>Transcription model:</label>
-                  {renderModelChoice(OPENAI_AUDIO_MODELS, openaiModel, handleOpenaiModelChange, "OpenAI transcription model")}
-                </div>
-              )}
+              <div className="control-row">
+                <label>Transcription model:</label>
+                {renderSelectedTranscriptionModel()}
+              </div>
               <div className="control-row">
                 <label>Conversion sample rate:</label>
                 <div className="sample-rate-control">
@@ -514,7 +658,7 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="control-row">
-                <label>Chunk size (MB):</label>
+                <label>Large-file chunk size (MB):</label>
                 <input className="input-standard" type="number" value={maxFileSizeMB} onChange={handleMaxFileSizeChange} min="1" />
               </div>
             </div>
@@ -528,7 +672,7 @@ const App: React.FC = () => {
               <p className="ant-upload-drag-icon"><FileAddOutlined /></p>
               <p className="ant-upload-text">Drop audios or videos here, or click to choose</p>
               <p className="ant-upload-hint">
-                Files are never uploaded anywhere. Everything is processed locally in this browser.
+                No app server receives your files. Transcription goes directly to your selected AI provider.
               </p>
             </Upload.Dragger>
           </div>
@@ -545,6 +689,8 @@ const App: React.FC = () => {
         {queue.jobs.length > 0 ? (
           <FileJobTable
             jobs={queue.jobs}
+            outputOptions={outputOptions}
+            onOutputOptionsChange={handleOutputOptionsChange}
             globalStatus={queue.globalStatus}
             isTranscriptionReady={ffmpegPool.isReady}
             onStartAll={queue.startAll}
@@ -563,12 +709,15 @@ const App: React.FC = () => {
               <div className="job-table-stats">
                 <span>Last transcript from this browser</span>
               </div>
+              <TranscriptOutputOptions jobs={recentJobs} options={outputOptions} onChange={handleOutputOptionsChange} />
             </div>
             <div className="job-table-rows">
               {recentJobs.map(job => (
                 <RecentTranscriptRow
                   key={job.id}
                   job={job}
+                  outputOptions={outputOptions}
+                  onOutputOptionsChange={handleOutputOptionsChange}
                   onRemove={removeRecentTranscription}
                   onCopy={handleCopy}
                   onDownload={handleDownload}
@@ -584,6 +733,9 @@ const App: React.FC = () => {
           selectedApi={selectedApi}
           groqKey={groqKey}
           openaiKey={openaiKey}
+          googleKey={googleKey}
+          googleChatModel={googleChatModel}
+          onGoogleChatModelChange={handleGoogleChatModelValueChange}
           openAiChatModel={openAiChatModel}
           groqChatModel={groqChatModel}
           onOpenAiChatModelChange={handleOpenAiChatModelValueChange}
@@ -628,7 +780,7 @@ const App: React.FC = () => {
         )}
       </div>
 
-      <ToastContainer autoClose={10000} />
+      <ToastContainer autoClose={10000} theme="dark" toastClassName="app-toast" />
 
       {/* Footer */}
       <footer>

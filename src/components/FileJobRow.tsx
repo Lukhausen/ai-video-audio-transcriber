@@ -8,11 +8,13 @@ import { RiCheckboxCircleLine, RiCloseCircleLine } from 'react-icons/ri';
 import { TbChevronDown, TbChevronRight, TbFileTextAi } from 'react-icons/tb';
 import { LoadingOutlined } from '@ant-design/icons';
 import TranscriptSummary from './TranscriptSummary';
-import type { FileJob } from '../types';
+import type { FileJob, TranscriptOutputOptions } from '../types';
+import { formatTranscript } from '../transcripts/output';
 import { hasHiddenTranscriptPreview } from '../utils/transcriptPreview';
 
 interface FileJobRowProps {
   job: FileJob;
+  outputOptions: TranscriptOutputOptions;
   onRemove: (id: string) => void;
   onStart: (id: string) => void;
   onRetry: (id: string) => void;
@@ -21,7 +23,7 @@ interface FileJobRowProps {
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  ready: { label: 'Uploaded', color: '#9a9a9a' },
+  ready: { label: 'Ready', color: '#9a9a9a' },
   queued: { label: 'Waiting', color: '#888' },
   converting: { label: 'Preparing audio', color: '#bbb' },
   splitting: { label: 'Creating chunks', color: '#bbb' },
@@ -33,6 +35,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
 
 const FileJobRow: React.FC<FileJobRowProps> = ({
   job,
+  outputOptions,
   onRemove,
   onStart,
   onRetry,
@@ -40,13 +43,14 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
   onDownload,
 }) => {
   const [expanded, setExpanded] = useState(false);
+  const transcript = formatTranscript(job, outputOptions);
   const statusCfg = STATUS_CONFIG[job.status] || STATUS_CONFIG.queued;
   const isActive = ['converting', 'splitting', 'transcribing', 'stitching'].includes(job.status);
   const canRemove = job.status === 'ready' || job.status === 'queued' || job.status === 'done' || job.status === 'error';
   const isVideo = job.mimeType.startsWith('video/');
   const hasTranscript = Boolean(job.transcript?.trim());
   const showTranscriptSummary = job.status === 'done' && hasTranscript;
-  const canExpandTranscript = showTranscriptSummary && hasHiddenTranscriptPreview(job.transcript);
+  const canExpandTranscript = showTranscriptSummary && hasHiddenTranscriptPreview(transcript);
   const isTranscriptExpanded = canExpandTranscript && expanded;
   const actionLayoutClass = hasTranscript ? 'job-row-actions-grid' : 'job-row-actions-compact';
   const toggleTranscript = () => {
@@ -63,7 +67,7 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
             <TranscriptSummary
               fileName={job.fileName}
               mimeType={job.mimeType}
-              transcript={job.transcript}
+              transcript={transcript}
               expanded={isTranscriptExpanded}
             />
           ) : (
@@ -120,13 +124,14 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
               aria-label={`Transcribe only ${job.fileName}`}
             >
               <TbFileTextAi />
+              <span className="icon-button-label">Transcribe</span>
             </button>
           )}
           {job.transcript && (
             <>
               <button
                 className="transcript-icon action-copy"
-                onClick={() => onCopy(job.transcript!)}
+                onClick={() => onCopy(transcript)}
                 title="Copy transcript"
                 aria-label={`Copy transcript for ${job.fileName}`}
               >
@@ -136,7 +141,7 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
                 className="transcript-icon action-download"
                 onClick={() => {
                   const baseName = job.fileName.replace(/\.[^.]+$/, '');
-                  onDownload(job.transcript!, `${baseName}-transcript.txt`);
+                  onDownload(transcript, `${baseName}-transcript.txt`);
                 }}
                 title="Download transcript"
                 aria-label={`Download transcript for ${job.fileName}`}

@@ -19,6 +19,14 @@ interface PersistentAudioRecorderProps {
   onLog: (msg: string, type?: 'info' | 'error') => void;
 }
 
+type WindowWithWebkitAudioContext = Window & typeof globalThis & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function formatRecordingTime(ms: number): string {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -202,7 +210,10 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       const mimeType = getRecordingMimeType();
       const createdAt = Date.now();
       const fileName = createRecordingName(createdAt, mimeType.includes('mp4') ? 'm4a' : 'webm');
-      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
+      if (!AudioContextCtor) {
+        throw new Error('Audio processing is not supported in this browser.');
+      }
       const audioContext = new AudioContextCtor();
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
@@ -260,8 +271,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
             setDraftRecording(undefined);
             onLog(`Saved recording "${saved.fileName}".`, 'info');
           }
-        } catch (err: any) {
-          onLog(`Could not save recording: ${err.message}`, 'error');
+        } catch (err: unknown) {
+          onLog(`Could not save recording: ${getErrorMessage(err)}`, 'error');
         } finally {
           setIsRecording(false);
           setElapsedMs(0);
@@ -284,14 +295,14 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       timerRef.current = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAtRef.current);
       }, 250);
-    } catch (err: any) {
+    } catch (err: unknown) {
       window.cancelAnimationFrame(animationFrameRef.current || 0);
       analyserRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       streamRef.current?.getTracks().forEach(track => track.stop());
       streamRef.current = null;
-      onLog(`Could not start recording: ${err.message}`, 'error');
+      onLog(`Could not start recording: ${getErrorMessage(err)}`, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -323,8 +334,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
 
     try {
       await audio.play();
-    } catch (err: any) {
-      onLog(`Could not play recovered recording: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      onLog(`Could not play recovered recording: ${getErrorMessage(err)}`, 'error');
     }
   };
 
@@ -377,11 +388,11 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
           className={`recovered-recorder-card ${showRecoveredNotice ? 'recovered-recorder-card-attention' : ''}`}
           role={showRecoveredNotice ? 'status' : undefined}
           aria-live={showRecoveredNotice ? 'polite' : undefined}
-          aria-label="Recording recovered. Restore it to the file list or transcribe it now."
+          aria-label="Recording recovered. Play it, transcribe it now, or delete it."
         >
           <span className="recovered-recorder-title">
             {showRecoveredNotice && <span className="recovered-recording-pulse" aria-hidden="true" />}
-            Recording Recovered
+            Recording recovered
           </span>
           <div className="recovered-recorder-actions">
             <audio

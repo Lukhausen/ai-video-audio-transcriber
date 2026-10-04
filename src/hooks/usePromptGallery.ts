@@ -76,7 +76,12 @@ export function usePromptGallery() {
         if ((b.lastUsed || 0) !== (a.lastUsed || 0)) return (b.lastUsed || 0) - (a.lastUsed || 0);
         return a.originalIndex - b.originalIndex;
       })
-      .map(({ originalIndex, ...prompt }) => prompt);
+      .map(prompt => ({
+        text: prompt.text,
+        custom: prompt.custom,
+        lastUsed: prompt.lastUsed,
+        useCount: prompt.useCount,
+      }));
   }, [customPrompts, promptUsage]);
 
   const addCustomPrompt = (text: string) => {

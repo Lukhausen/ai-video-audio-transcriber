@@ -3,11 +3,15 @@ import { FaCopy, FaFileDownload } from 'react-icons/fa';
 import { BiSolidTrashAlt } from 'react-icons/bi';
 import { TbChevronDown, TbChevronRight } from 'react-icons/tb';
 import TranscriptSummary from './TranscriptSummary';
-import type { FileJob } from '../types';
+import TranscriptOutputOptions from './TranscriptOutputOptions';
+import type { FileJob, TranscriptOutputOptions as OutputOptions } from '../types';
+import { formatTranscript } from '../transcripts/output';
 import { hasHiddenTranscriptPreview } from '../utils/transcriptPreview';
 
 interface RecentTranscriptRowProps {
   job: FileJob;
+  outputOptions: OutputOptions;
+  onOutputOptionsChange: (options: OutputOptions) => void;
   onRemove: (id: string) => void;
   onCopy: (text: string) => void;
   onDownload: (text: string, fileName: string) => void;
@@ -15,12 +19,15 @@ interface RecentTranscriptRowProps {
 
 const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
   job,
+  outputOptions,
+  onOutputOptionsChange,
   onRemove,
   onCopy,
   onDownload,
 }) => {
   const [expanded, setExpanded] = useState(false);
-  const canExpandTranscript = hasHiddenTranscriptPreview(job.transcript);
+  const transcript = formatTranscript(job, outputOptions);
+  const canExpandTranscript = Boolean(job.transcriptCues?.length) || hasHiddenTranscriptPreview(job.transcript);
   const isTranscriptExpanded = canExpandTranscript && expanded;
   const toggleTranscript = () => {
     if (canExpandTranscript) setExpanded(e => !e);
@@ -32,7 +39,7 @@ const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
         <TranscriptSummary
           fileName={job.fileName}
           mimeType={job.mimeType}
-          transcript={job.transcript}
+          transcript={transcript}
           expanded={isTranscriptExpanded}
         />
 
@@ -41,7 +48,7 @@ const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
             <>
               <button
                 className="transcript-icon action-copy"
-                onClick={() => onCopy(job.transcript!)}
+                onClick={() => onCopy(transcript)}
                 title="Copy transcript"
                 aria-label={`Copy transcript from ${job.fileName}`}
               >
@@ -51,7 +58,7 @@ const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
                 className="transcript-icon action-download"
                 onClick={() => {
                   const baseName = job.fileName.replace(/\.[^.]+$/, '');
-                  onDownload(job.transcript!, `${baseName}-transcript.txt`);
+                  onDownload(transcript, `${baseName}-transcript.txt`);
                 }}
                 title="Download transcript"
                 aria-label={`Download transcript from ${job.fileName}`}
@@ -80,6 +87,11 @@ const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
           )}
         </div>
       </div>
+      {isTranscriptExpanded && (
+        <div className="recent-transcript-output-options">
+          <TranscriptOutputOptions jobs={[job]} options={outputOptions} onChange={onOutputOptionsChange} />
+        </div>
+      )}
     </div>
   );
 };

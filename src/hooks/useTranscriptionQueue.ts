@@ -3,9 +3,12 @@ import { useReducer, useRef, useCallback } from 'react';
 import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
-import type { FileJob, ApiConfig, SegmentInfo } from '../types';
+import { transcribeGoogleAudio } from '../providers/google';
+import type { FileJob, ApiConfig, SegmentInfo, AudioChunk, TranscriptionResult } from '../types';
 import type { FFmpegPoolHandle } from './useFFmpegPool';
 import { RateLimiter } from '../utils/rateLimiter';
+import { parseAudioTranscription } from '../transcripts/metadata';
+import { joinCueText, mergeTranscriptCues } from '../transcripts/output';
 import { stitchTranscriptions } from '../utils/stitching';
 
 // ---- Reducer types ----
@@ -59,7 +62,7 @@ function queueReducer(state: QueueState, action: QueueAction): QueueState {
 // ---- Side-channel for binary data (never in React state) ----
 interface BinaryData {
   file: File;
-  segments?: Uint8Array[];
+  segments?: AudioChunk[];
   segmentInfos?: SegmentInfo[];
 }
 
@@ -86,8 +89,12 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function getRawErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function createConversionError(fileName: string, err: unknown, ffmpegOutput: string): Error {
-  const rawMessage = err instanceof Error ? err.message : String(err);
+  const rawMessage = getRawErrorMessage(err);
   const output = ffmpegOutput.toLowerCase();
   const looksInvalid =
     output.includes('invalid frame size') ||
@@ -100,6 +107,51 @@ function createConversionError(fileName: string, err: unknown, ffmpegOutput: str
   }
 
   return new Error(rawMessage || `Could not convert "${fileName}".`);
+}
+
+function createUserFacingError(fileName: string, err: unknown): string {
+  const rawMessage = getRawErrorMessage(err);
+  const normalized = rawMessage.toLowerCase();
+
+  if (
+    normalized.includes('errnoerror') ||
+    normalized.includes('fs error') ||
+    normalized.includes('invalid frame size') ||
+    normalized.includes('invalid argument') ||
+    normalized.includes('valid audio or video')
+  ) {
+    return `This file could not be read. It may be empty, corrupted, or not a real audio/video file: "${fileName}".`;
+  }
+
+  if (normalized.includes('no groq api key')) {
+    return 'Add your Groq API key before transcribing.';
+  }
+
+  if (normalized.includes('no openai api key')) {
+    return 'Add your OpenAI API key before transcribing.';
+  }
+
+  if (normalized.includes('no google api key')) {
+    return 'Add your Google API key before transcribing.';
+  }
+
+  if (normalized.includes('api_key_invalid') || normalized.includes('api key not valid')) {
+    return 'The selected provider rejected the API key. Check it in Advanced settings and try again.';
+  }
+
+  if (normalized.includes('401') || normalized.includes('unauthorized') || normalized.includes('invalid api key')) {
+    return 'The selected provider rejected the API key. Check it in Advanced settings and try again.';
+  }
+
+  if (normalized.includes('429') || normalized.includes('rate limit')) {
+    return 'The selected provider is rate limiting requests. Wait a moment, then retry this file.';
+  }
+
+  if (normalized.includes('network') || normalized.includes('failed to fetch')) {
+    return 'The transcription request could not reach the selected provider. Check your connection and try again.';
+  }
+
+  return rawMessage || `Could not transcribe "${fileName}".`;
 }
 
 // ---- Hook config ----
@@ -198,9 +250,9 @@ export function useTranscriptionQueue(config: QueueConfig) {
   const convertFile = useCallback(async (
     ffmpeg: FFmpeg,
     jobId: string,
-    file: File
+    file: File,
+    cfg: ApiConfig
   ): Promise<{ mp3Data: Uint8Array }> => {
-    const cfg = getApiConfig();
     // Use a unique mount dir per job to avoid collisions
     const mountDir = `/mnt_${jobId}`;
     const outputFileName = `out_${jobId}.mp3`;
@@ -243,92 +295,90 @@ export function useTranscriptionQueue(config: QueueConfig) {
       try { ffmpeg.deleteFile(outputFileName); } catch { /* ok */ }
       throw createConversionError(file.name, err, ffmpegOutput);
     }
-  }, [getApiConfig]);
+  }, []);
 
-  // ---- Split file if too large (recursive binary split) ----
+  // ---- Split audio to fit provider byte and duration limits ----
   const splitFile = useCallback(async (
     ffmpeg: FFmpeg,
     jobId: string,
-    mp3Data: Uint8Array
-  ): Promise<Uint8Array[]> => {
-    const cfg = getApiConfig();
-    const MAX_BYTES = cfg.maxFileSizeMB * 1024 * 1024;
+    mp3Data: Uint8Array,
+    cfg: ApiConfig
+  ): Promise<AudioChunk[]> => {
+    const maxBytes = cfg.selectedApi === 'google'
+      ? Math.min(cfg.maxFileSizeMB * 1024 * 1024, 2 * 1024 ** 3)
+      : cfg.maxFileSizeMB * 1024 * 1024;
+    // Speaker/word annotations limit Google requests to 30 minutes.
+    const maxDuration = cfg.selectedApi === 'google' ? 1790 : Infinity;
+    const overlap = cfg.selectedApi === 'openai' && cfg.openaiModel === 'gpt-4o-transcribe-diarize' ? 0 : 3;
+    if (mp3Data.byteLength <= maxBytes && maxDuration === Infinity) return [{ data: mp3Data, offset: 0, keepStart: 0, keepEnd: Infinity }];
 
-    if (mp3Data.byteLength <= MAX_BYTES) {
-      return [mp3Data];
-    }
-
-    onLog(`[${jobId.slice(0, 6)}] File too large (${(mp3Data.byteLength / 1024 / 1024).toFixed(1)}MB), splitting...`, 'info');
-
-    // Write MP3 to FFmpeg FS for splitting
     const rootName = `split_${jobId}.mp3`;
-    await ffmpeg.writeFile(rootName, mp3Data);
+    const temporaryFiles = new Set([rootName]);
+    try {
+      await ffmpeg.writeFile(rootName, mp3Data);
+      const recursiveSplit = async (
+        filename: string, offset: number, keepStart: number, keepEnd: number,
+      ): Promise<AudioChunk[]> => {
+        const fileData = await ffmpeg.readFile(filename) as Uint8Array;
+        if (fileData.byteLength <= maxBytes && maxDuration === Infinity) return [{ data: fileData, offset, keepStart, keepEnd }];
 
-    const recursiveSplit = async (filename: string): Promise<string[]> => {
-      const fileData = await ffmpeg.readFile(filename) as Uint8Array;
-      if (fileData.byteLength <= MAX_BYTES) {
-        return [filename];
+        let output = '';
+        const logHandler = ({ message }: { message: string }) => { output += message + '\n'; };
+        ffmpeg.on('log', logHandler);
+        try {
+          await ffmpeg.exec(['-i', filename, '-t', '0', '-f', 'null', '-']);
+        } finally {
+          ffmpeg.off('log', logHandler);
+        }
+        const durationMatch = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+        if (!durationMatch) throw new Error('Could not determine audio duration for safe splitting.');
+        const duration = Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3]);
+        if (fileData.byteLength <= maxBytes && duration <= maxDuration) return [{ data: fileData, offset, keepStart, keepEnd }];
+        // Overlapping halves must shrink, including for unusually small chunk settings.
+        if (duration <= overlap * 2 || duration <= 0) throw new Error('Audio cannot fit the selected chunk size. Increase it in Advanced settings.');
+
+        const halfTime = duration / 2;
+        const leftName = `${filename}_L.mp3`;
+        const rightName = `${filename}_R.mp3`;
+        temporaryFiles.add(leftName);
+        temporaryFiles.add(rightName);
+        await ffmpeg.exec(['-i', filename, '-ss', '0', '-to', (halfTime + overlap).toString(), '-c', 'copy', leftName]);
+        await ffmpeg.exec(['-i', filename, '-ss', (halfTime - overlap).toString(), '-to', duration.toString(), '-c', 'copy', rightName]);
+        const boundary = offset + halfTime;
+        return [
+          ...await recursiveSplit(leftName, offset, keepStart, Math.min(keepEnd, boundary)),
+          ...await recursiveSplit(rightName, offset + halfTime - overlap, Math.max(keepStart, boundary), keepEnd),
+        ];
+      };
+
+      const segments: AudioChunk[] = await recursiveSplit(rootName, 0, 0, Infinity);
+      if (segments.length > 1) onLog(`[${jobId.slice(0, 6)}] Split into ${segments.length} segments.`, 'info');
+      return segments;
+    } finally {
+      for (const name of temporaryFiles) {
+        try { await ffmpeg.deleteFile(name); } catch { /* already removed */ }
       }
-
-      // Get duration
-      let tempOut = '';
-      const tempLogHandler = ({ message }: { message: string }) => { tempOut += message + '\n'; };
-      ffmpeg.on('log', tempLogHandler);
-      await ffmpeg.exec(['-i', filename, '-f', 'null', '-']);
-      ffmpeg.off('log', tempLogHandler);
-
-      const durationMatch = tempOut.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-      if (!durationMatch) {
-        return [filename]; // Can't determine duration, return as-is
-      }
-      const totalDuration = parseInt(durationMatch[1]) * 3600 + parseInt(durationMatch[2]) * 60 + parseFloat(durationMatch[3]);
-
-      const halfTime = totalDuration / 2;
-      const leftEnd = Math.min(halfTime + 3, totalDuration);
-      const rightStart = Math.max(halfTime - 3, 0);
-      const leftName = `${filename}_L.mp3`;
-      const rightName = `${filename}_R.mp3`;
-
-      await ffmpeg.exec(['-i', filename, '-ss', '0', '-to', leftEnd.toString(), '-c', 'copy', leftName]);
-      await ffmpeg.exec(['-i', filename, '-ss', rightStart.toString(), '-to', totalDuration.toString(), '-c', 'copy', rightName]);
-
-      const leftSegments = await recursiveSplit(leftName);
-      const rightSegments = await recursiveSplit(rightName);
-      return [...leftSegments, ...rightSegments];
-    };
-
-    const segmentNames = await recursiveSplit(rootName);
-
-    // Read all segments out as Uint8Array
-    const segments: Uint8Array[] = [];
-    for (const name of segmentNames) {
-      const data = await ffmpeg.readFile(name) as Uint8Array;
-      segments.push(data);
-      try { ffmpeg.deleteFile(name); } catch { /* ok */ }
     }
-
-    // Cleanup root file
-    try { ffmpeg.deleteFile(rootName); } catch { /* ok */ }
-
-    onLog(`[${jobId.slice(0, 6)}] Split into ${segments.length} segments.`, 'info');
-    return segments;
-  }, [getApiConfig, onLog]);
+  }, [onLog]);
 
   // ---- Transcribe a single segment ----
   const transcribeSegment = useCallback(async (
     segmentData: Uint8Array,
     segmentName: string,
-    jobId: string
-  ): Promise<string> => {
-    const cfg = getApiConfig();
+    jobId: string,
+    cfg: ApiConfig
+  ): Promise<TranscriptionResult> => {
     const limiter = rateLimiterRef.current;
 
     await limiter.acquire();
     try {
-      const blob = new Blob([segmentData.buffer], { type: 'audio/mp3' });
+      const bytes = segmentData.byteOffset === 0 && segmentData.byteLength === segmentData.buffer.byteLength
+        ? segmentData.buffer
+        : segmentData.buffer.slice(segmentData.byteOffset, segmentData.byteOffset + segmentData.byteLength);
+      const blob = new Blob([bytes], { type: 'audio/mp3' });
       const audioFile = new File([blob], segmentName, { type: 'audio/mp3' });
 
-      let text = '';
+      let result: TranscriptionResult;
 
       if (cfg.selectedApi === 'groq') {
         if (!cfg.groqKey) throw new Error('No Groq API key set.');
@@ -337,36 +387,45 @@ export function useTranscriptionQueue(config: QueueConfig) {
           file: audioFile,
           model: cfg.groqModel,
           response_format: 'verbose_json',
+          timestamp_granularities: ['word', 'segment'],
         });
-        text = resp?.text || '';
+        result = parseAudioTranscription(resp);
+      } else if (cfg.selectedApi === 'google') {
+        result = await transcribeGoogleAudio(cfg.googleKey, cfg.googleModel, audioFile, message => onLog(message, 'error'));
       } else {
         if (!cfg.openaiKey) throw new Error('No OpenAI API key set.');
         const client = new OpenAI({ apiKey: cfg.openaiKey, dangerouslyAllowBrowser: true });
         const resp = await client.audio.transcriptions.create({
           file: audioFile,
           model: cfg.openaiModel,
-          response_format: 'verbose_json',
+          ...(cfg.openaiModel === 'gpt-4o-transcribe-diarize'
+            ? { response_format: 'diarized_json' as const, chunking_strategy: 'auto' as const }
+            : cfg.openaiModel === 'whisper-1'
+              ? { response_format: 'verbose_json' as const, timestamp_granularities: ['word', 'segment'] }
+              : {}),
         });
-        text = resp?.text || '';
+        result = parseAudioTranscription(resp);
       }
 
       limiter.release();
       limiter.onSuccess();
-      return text;
-    } catch (err: any) {
+      return result;
+    } catch (err: unknown) {
       limiter.release();
-      if (err?.status === 429 || err?.message?.includes('429')) {
+      const providerError = err as { status?: number; message?: string };
+      if (providerError.status === 429 || providerError.message?.includes('429')) {
         limiter.on429();
         onLog(`[${jobId.slice(0, 6)}] Rate limited (429). Backing off...`, 'error');
       }
       throw err;
     }
-  }, [getApiConfig, onLog]);
+  }, [onLog]);
 
   // ---- Process a single job end-to-end ----
   const processJob = useCallback(async (jobId: string) => {
     const bd = binaryRef.current.get(jobId);
     if (!bd) return;
+    const cfg = { ...getApiConfig() };
 
     try {
       // Step 1: Convert
@@ -374,16 +433,16 @@ export function useTranscriptionQueue(config: QueueConfig) {
       onLog(`[${bd.file.name}] Converting to MP3...`, 'info');
 
       const { instance, release } = await ffmpegPool.acquire();
-      let segments: Uint8Array[] | null = null;
+      let segments: AudioChunk[] | null = null;
       try {
-        const result = await convertFile(instance, jobId, bd.file);
+        const result = await convertFile(instance, jobId, bd.file, cfg);
         const mp3Data = result.mp3Data;
         updateJob(jobId, { progress: 30 });
         onLog(`[${bd.file.name}] Conversion complete (${(mp3Data.byteLength / 1024 / 1024).toFixed(1)}MB).`, 'info');
 
         // Step 2: Split
         updateJob(jobId, { status: 'splitting', progress: 35 });
-        segments = await splitFile(instance, jobId, mp3Data);
+        segments = await splitFile(instance, jobId, mp3Data, cfg);
 
         release(); // Free the FFmpeg instance for other jobs
       } catch (err) {
@@ -405,7 +464,7 @@ export function useTranscriptionQueue(config: QueueConfig) {
       updateJob(jobId, { status: 'transcribing', progress: 45 });
       onLog(`[${bd.file.name}] Transcribing ${segments.length} segment(s)...`, 'info');
 
-      const transcripts: string[] = [];
+      const results: TranscriptionResult[] = [];
       for (let i = 0; i < segments.length; i++) {
         if (pausedRef.current) {
           updateJob(jobId, { status: 'queued', progress: 0 });
@@ -413,8 +472,8 @@ export function useTranscriptionQueue(config: QueueConfig) {
         }
 
         const segName = `${sanitizeFilename(bd.file.name)}_seg${i}.mp3`;
-        const text = await transcribeSegment(segments[i], segName, jobId);
-        transcripts.push(text);
+        const result = await transcribeSegment(segments[i].data, segName, jobId, cfg);
+        results.push(result);
 
         const transcribeProgress = 45 + ((i + 1) / segments.length) * 45;
         updateJob(jobId, {
@@ -425,21 +484,24 @@ export function useTranscriptionQueue(config: QueueConfig) {
 
       // Step 4: Stitch
       updateJob(jobId, { status: 'stitching', progress: 92 });
-      const transcript = stitchTranscriptions(transcripts, (msg: string, type?: "info" | "error") => onLog(msg, type || 'info'));
+      const transcriptCues = mergeTranscriptCues(results, segments);
+      const transcript = transcriptCues
+        ? results.length === 1 ? results[0].text : joinCueText(transcriptCues)
+        : stitchTranscriptions(results.map(result => result.text), (msg, type) => onLog(msg, type || 'info'));
 
       // Done!
-      updateJob(jobId, { status: 'done', progress: 100, transcript });
+      updateJob(jobId, { status: 'done', progress: 100, transcript, transcriptCues });
       onLog(`[${bd.file.name}] ✓ Transcription complete.`, 'info');
 
       // Free binary data — no longer needed
       delete bd.segments;
 
-    } catch (err: any) {
-      const msg = err?.message || String(err);
+    } catch (err: unknown) {
+      const msg = createUserFacingError(bd?.file?.name || 'this file', err);
       updateJob(jobId, { status: 'error', error: msg });
       onLog(`[${bd?.file?.name}] Error: ${msg}`, 'error');
     }
-  }, [ffmpegPool, convertFile, splitFile, transcribeSegment, updateJob, onLog]);
+  }, [ffmpegPool, convertFile, splitFile, transcribeSegment, updateJob, onLog, getApiConfig]);
 
   // ---- Claim next available queued job (thread-safe via Set) ----
   const claimNextJob = useCallback((): string | null => {
@@ -465,8 +527,7 @@ export function useTranscriptionQueue(config: QueueConfig) {
     const poolSize = 2;
     const loops = Array.from({ length: poolSize }, () =>
       (async () => {
-        while (true) {
-          if (pausedRef.current) break;
+        while (!pausedRef.current) {
           const jobId = claimNextJob();
           if (!jobId) break;
           updateJob(jobId, { status: 'converting', progress: 5 });

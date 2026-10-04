@@ -3,18 +3,23 @@ import React, { useState } from 'react';
 import { LoadingOutlined } from '@ant-design/icons';
 import { FaCopy, FaFileDownload } from 'react-icons/fa';
 import { TbFileTextAi } from 'react-icons/tb';
+import { LuSettings2 } from 'react-icons/lu';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
+import { transformGoogleTranscript } from '../providers/google';
 import CollapsibleLLMOutput, { CollapsibleLLMOutputRef } from './CollapsibleLLMOutput';
 import { usePromptGallery } from '../hooks/usePromptGallery';
-import { GROQ_CHAT_MODELS, OPENAI_CHAT_MODELS } from '../modelOptions';
-import type { FileJob } from '../types';
+import { GOOGLE_CHAT_MODELS, GROQ_CHAT_MODELS, OPENAI_CHAT_MODELS, type ModelOption } from '../modelOptions';
+import type { ApiProvider, FileJob } from '../types';
 
 interface BatchLLMPanelProps {
   jobs: FileJob[];
-  selectedApi: 'groq' | 'openai';
+  selectedApi: ApiProvider;
   groqKey: string;
   openaiKey: string;
+  googleKey: string;
+  googleChatModel: string;
+  onGoogleChatModelChange: (model: string) => void;
   openAiChatModel: string;
   groqChatModel: string;
   onOpenAiChatModelChange: (model: string) => void;
@@ -27,11 +32,18 @@ interface BatchLLMPanelProps {
 
 const DEFAULT_INSTRUCTION = 'Summarize this transcript with the key points, decisions, and action items.';
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   jobs,
   selectedApi,
   groqKey,
   openaiKey,
+  googleKey,
+  googleChatModel,
+  onGoogleChatModelChange,
   openAiChatModel,
   groqChatModel,
   onOpenAiChatModelChange,
@@ -48,11 +60,15 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   const [mode, setMode] = useState<'per-file' | 'combined'>('per-file');
   const [isGenerating, setIsGenerating] = useState(false);
   const [combinedResult, setCombinedResult] = useState('');
+  const [showOptions, setShowOptions] = useState(false);
   const llmOutputRef = React.useRef<CollapsibleLLMOutputRef>(null);
 
   const { prompts, addCustomPrompt, removeCustomPrompt, updatePromptUsage } = usePromptGallery();
 
   const callLLM = async (transcript: string): Promise<string> => {
+    if (selectedApi === 'google') {
+      return transformGoogleTranscript(googleKey, googleChatModel, transcript, systemPrompt);
+    }
     if (selectedApi === 'openai') {
       if (!openaiKey) throw new Error('No OpenAI API key set.');
       const client = new OpenAI({ apiKey: openaiKey, dangerouslyAllowBrowser: true });
@@ -62,26 +78,25 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
           { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
           { role: 'user', content: transcript },
         ],
-        temperature: 1,
-      });
-      return response.choices?.[0]?.message?.content || '';
-    } else {
-      if (!groqKey) throw new Error('No Groq API key set.');
-      const client = new Groq({ apiKey: groqKey, dangerouslyAllowBrowser: true });
-      const response = await client.chat.completions.create({
-        model: groqChatModel,
-        messages: [
-          { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
-          { role: 'user', content: transcript },
-        ],
-        temperature: 1,
-        max_completion_tokens: 15140,
-        top_p: 1,
-        stop: null,
-        stream: false,
       });
       return response.choices?.[0]?.message?.content || '';
     }
+
+    if (!groqKey) throw new Error('No Groq API key set.');
+    const client = new Groq({ apiKey: groqKey, dangerouslyAllowBrowser: true });
+    const response = await client.chat.completions.create({
+      model: groqChatModel,
+      messages: [
+        { role: 'system', content: systemPrompt || 'You are a helpful assistant.' },
+        { role: 'user', content: transcript },
+      ],
+      temperature: 1,
+      max_completion_tokens: 15140,
+      top_p: 1,
+      stop: null,
+      stream: false,
+    });
+    return response.choices?.[0]?.message?.content || '';
   };
 
   const handleProcess = async () => {
@@ -103,8 +118,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
             const result = await callLLM(job.transcript!);
             onSetLLMResult(job.id, result);
             onLog(`[AI] "${job.fileName}" done.`, 'info');
-          } catch (err: any) {
-            onLog(`[AI] Error on "${job.fileName}": ${err.message}`, 'error');
+          } catch (err: unknown) {
+            onLog(`[AI] Error on "${job.fileName}": ${getErrorMessage(err)}`, 'error');
           }
         }
       } else {
@@ -117,8 +132,8 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
         setCombinedResult(result);
         onLog('[AI] Combined processing done.', 'info');
       }
-    } catch (err: any) {
-      onLog(`[AI] Error: ${err.message}`, 'error');
+    } catch (err: unknown) {
+      onLog(`[AI] Error: ${getErrorMessage(err)}`, 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -149,9 +164,13 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
   };
 
   const hasVisibleAiOutput = mode === 'combined' ? Boolean(combinedResult) : aiResultJobs.length > 0;
-  const chatModelOptions = selectedApi === 'openai' ? OPENAI_CHAT_MODELS : GROQ_CHAT_MODELS;
-  const chatModelValue = selectedApi === 'openai' ? openAiChatModel : groqChatModel;
-  const handleChatModelChange = selectedApi === 'openai' ? onOpenAiChatModelChange : onGroqChatModelChange;
+  const chatModelOptions: ModelOption[] = {
+    openai: OPENAI_CHAT_MODELS, groq: GROQ_CHAT_MODELS, google: GOOGLE_CHAT_MODELS,
+  }[selectedApi];
+  const chatModelValue = { openai: openAiChatModel, groq: groqChatModel, google: googleChatModel }[selectedApi];
+  const handleChatModelChange = {
+    openai: onOpenAiChatModelChange, groq: onGroqChatModelChange, google: onGoogleChatModelChange,
+  }[selectedApi];
 
   if (completedJobs.length === 0) return null;
 
@@ -161,7 +180,19 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
         <div className="llm-panel-title">
           <h3>Transform transcripts</h3>
         </div>
-        <div className="llm-panel-controls" aria-label="Transform options">
+        <button
+          type="button"
+          className="settings-toggle llm-options-toggle"
+          onClick={() => setShowOptions(visible => !visible)}
+          aria-expanded={showOptions}
+        >
+          <LuSettings2 />
+          <span>{showOptions ? 'Hide options' : 'Options'}</span>
+        </button>
+      </div>
+
+      {showOptions && (
+        <div className="llm-panel-controls llm-options-panel" aria-label="Transform options">
           <div className="llm-option">
             <span className="llm-option-label">Model</span>
             <div className="segmented-control model-choice-control model-choice-control-panel" role="radiogroup" aria-label="Text AI model">
@@ -200,7 +231,7 @@ const BatchLLMPanel: React.FC<BatchLLMPanelProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="llm-compose">
         <div className="prompt-gallery" aria-label="Saved instructions">

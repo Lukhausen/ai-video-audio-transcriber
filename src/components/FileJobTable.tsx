@@ -5,10 +5,14 @@ import { FaFileDownload } from 'react-icons/fa';
 import { BiSolidTrashAlt } from 'react-icons/bi';
 import { TbChevronDown, TbChevronRight, TbFileTextAi, TbPlayerPauseFilled, TbPlayerPlayFilled } from 'react-icons/tb';
 import FileJobRow from './FileJobRow';
-import type { FileJob } from '../types';
+import TranscriptOutputOptions from './TranscriptOutputOptions';
+import { formatTranscript } from '../transcripts/output';
+import type { FileJob, TranscriptOutputOptions as OutputOptions } from '../types';
 
 interface FileJobTableProps {
   jobs: FileJob[];
+  outputOptions: OutputOptions;
+  onOutputOptionsChange: (options: OutputOptions) => void;
   globalStatus: 'idle' | 'processing' | 'paused';
   isTranscriptionReady: boolean;
   onStartAll: () => void;
@@ -24,6 +28,8 @@ interface FileJobTableProps {
 
 const FileJobTable: React.FC<FileJobTableProps> = ({
   jobs,
+  outputOptions,
+  onOutputOptionsChange,
   globalStatus,
   isTranscriptionReady,
   onStartAll,
@@ -56,7 +62,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
       // Single file — just download directly
       const job = completedJobs[0];
       const baseName = job.fileName.replace(/\.[^.]+$/, '');
-      onDownload(job.transcript!, `${baseName}-transcript.txt`);
+      onDownload(formatTranscript(job, outputOptions), `${baseName}-transcript.txt`);
       return;
     }
 
@@ -64,7 +70,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
     const zip = new JSZip();
     for (const job of completedJobs) {
       const baseName = job.fileName.replace(/\.[^.]+$/, '');
-      zip.file(`${baseName}-transcript.txt`, job.transcript || '');
+      zip.file(`${baseName}-transcript.txt`, formatTranscript(job, outputOptions));
     }
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
@@ -75,12 +81,13 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  }, [completedJobs, onDownload]);
+  }, [completedJobs, onDownload, outputOptions]);
 
   const renderRows = (rows: FileJob[]) => rows.map(job => (
     <FileJobRow
       key={job.id}
       job={job}
+      outputOptions={outputOptions}
       onStart={onStartJob}
       onRemove={onRemoveJob}
       onRetry={onRetryJob}
@@ -114,6 +121,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
 
   const renderCompletedActions = () => (
     <div className="job-table-section-actions job-table-section-actions-inline">
+      <TranscriptOutputOptions jobs={completedJobs} options={outputOptions} onChange={onOutputOptionsChange} />
       <button className="btn-standard btn-inline-action" onClick={handleDownloadAll}>
         <FaFileDownload /> Download transcripts
       </button>

@@ -26,17 +26,46 @@ export interface FileJob {
   segmentCount?: number;
   segmentsTranscribed?: number;
   transcript?: string;
+  transcriptCues?: TranscriptCue[];
   llmResult?: string;
   error?: string;
   addedAt: number;
 }
 
+export interface TranscriptCue {
+  text: string;
+  start?: number;
+  end?: number;
+  speaker?: string;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  cues?: TranscriptCue[];
+}
+
+export interface TranscriptOutputOptions {
+  timestamps: boolean;
+  speakers: boolean;
+}
+
+export interface AudioChunk {
+  data: Uint8Array;
+  offset: number;
+  keepStart: number;
+  keepEnd: number;
+}
+
+export type ApiProvider = 'groq' | 'openai' | 'google';
+
 export interface ApiConfig {
-  selectedApi: 'groq' | 'openai';
+  selectedApi: ApiProvider;
   groqKey: string;
   openaiKey: string;
+  googleKey: string;
   groqModel: string;
   openaiModel: string;
+  googleModel: string;
   maxFileSizeMB: number;
   sampleRate: number;
 }
