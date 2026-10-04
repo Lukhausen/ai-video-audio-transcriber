@@ -3,7 +3,6 @@ import { FaCopy, FaFileDownload } from 'react-icons/fa';
 import { BiSolidTrashAlt } from 'react-icons/bi';
 import { TbChevronDown, TbChevronRight } from 'react-icons/tb';
 import TranscriptSummary from './TranscriptSummary';
-import TranscriptOutputOptions from './TranscriptOutputOptions';
 import type { FileJob, TranscriptOutputOptions as OutputOptions } from '../types';
 import { formatTranscript } from '../transcripts/output';
 import { hasHiddenTranscriptPreview } from '../utils/transcriptPreview';
@@ -11,7 +10,6 @@ import { hasHiddenTranscriptPreview } from '../utils/transcriptPreview';
 interface RecentTranscriptRowProps {
   job: FileJob;
   outputOptions: OutputOptions;
-  onOutputOptionsChange: (options: OutputOptions) => void;
   onRemove: (id: string) => void;
   onCopy: (text: string) => void;
   onDownload: (text: string, fileName: string) => void;
@@ -20,7 +18,6 @@ interface RecentTranscriptRowProps {
 const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
   job,
   outputOptions,
-  onOutputOptionsChange,
   onRemove,
   onCopy,
   onDownload,
@@ -87,11 +84,6 @@ const RecentTranscriptRow: React.FC<RecentTranscriptRowProps> = ({
           )}
         </div>
       </div>
-      {isTranscriptExpanded && (
-        <div className="recent-transcript-output-options">
-          <TranscriptOutputOptions jobs={[job]} options={outputOptions} onChange={onOutputOptionsChange} />
-        </div>
-      )}
     </div>
   );
 };

@@ -7,5 +7,5 @@
 - Default to Google for first-time visitors and show the provider switch in Google, Groq, OpenAI order; preserve valid saved provider choices.
 
 - Place timestamps and speaker-label switches beside Download transcripts and Clear transcribed files; collect supported metadata once, then update displayed, copied, and downloaded text locally without repeating transcription.
-- Keep timestamp and speaker switches available inside each expanded recent transcript, and keep it expanded while changing those options.
+- Show timestamp and speaker switches only in the recent-transcript top bar; they also update expanded transcripts without collapsing them.
 - Deploy the website automatically when changes are pushed to `prod`, using the dedicated Hetzner FTP account; other branches do not publish the site.

@@ -717,7 +717,6 @@ const App: React.FC = () => {
                   key={job.id}
                   job={job}
                   outputOptions={outputOptions}
-                  onOutputOptionsChange={handleOutputOptionsChange}
                   onRemove={removeRecentTranscription}
                   onCopy={handleCopy}
                   onDownload={handleDownload}
