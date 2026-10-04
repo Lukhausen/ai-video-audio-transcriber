@@ -12,18 +12,23 @@ export default function TranscriptOutputOptions({ jobs, options, onChange }: Pro
   const cues = jobs.flatMap(job => job.transcriptCues || []);
   const hasTimes = cues.some(hasTimestamp);
   const hasSpeakers = cues.some(cue => cue.speaker);
+  if (!hasTimes && !hasSpeakers) return null;
   return (
     <div className="transcript-output-options" aria-label="Transcript output">
-      <label className="transcript-output-option" title={hasTimes ? 'Show or hide saved timestamps instantly' : 'Timestamps are not available in these transcripts'}>
-        <Switch size="small" checked={options.timestamps && hasTimes} disabled={!hasTimes}
-          onChange={timestamps => onChange({ ...options, timestamps })} aria-label="Show timestamps" />
-        <span>Timestamps</span>
-      </label>
-      <label className="transcript-output-option" title={hasSpeakers ? 'Show or hide saved speaker labels instantly. Labels restart for each audio part.' : 'Speaker labels are not available in these transcripts'}>
-        <Switch size="small" checked={options.speakers && hasSpeakers} disabled={!hasSpeakers}
-          onChange={speakers => onChange({ ...options, speakers })} aria-label="Show speakers" />
-        <span>Speakers</span>
-      </label>
+      {hasTimes && (
+        <label className="transcript-output-option" title="Show or hide saved timestamps instantly">
+          <Switch size="small" checked={options.timestamps}
+            onChange={timestamps => onChange({ ...options, timestamps })} aria-label="Show timestamps" />
+          <span>Timestamps</span>
+        </label>
+      )}
+      {hasSpeakers && (
+        <label className="transcript-output-option" title="Show or hide saved speaker labels instantly. Labels restart for each audio part.">
+          <Switch size="small" checked={options.speakers}
+            onChange={speakers => onChange({ ...options, speakers })} aria-label="Show speakers" />
+          <span>Speakers</span>
+        </label>
+      )}
     </div>
   );
 }

@@ -8,4 +8,5 @@
 
 - Place timestamps and speaker-label switches beside Download transcripts and Clear transcribed files; collect supported metadata once, then update displayed, copied, and downloaded text locally without repeating transcription.
 - Show timestamp and speaker switches only in the recent-transcript top bar; they also update expanded transcripts without collapsing them.
+- Hide each transcript output switch when none of the displayed transcripts has matching metadata; show only the available timestamp and speaker controls instead of disabled controls.
 - Deploy the website automatically when changes are pushed to `prod`, using the dedicated Hetzner FTP account; other branches do not publish the site.
