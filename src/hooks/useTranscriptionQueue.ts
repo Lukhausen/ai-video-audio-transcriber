@@ -1,27 +1,25 @@
-import { useCallback, useRef, useState } from 'react';
-import Groq from 'groq-sdk';
-import OpenAI from 'openai';
-import { transcribeGoogleAudio } from '../providers/google';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FileJob, ApiConfig, ApiProvider, AudioChunk, TranscriptionResult } from '../types';
 import { AUDIO_WORKERS, type FFmpegPoolHandle } from './useFFmpegPool';
 import { convertAudio, isSupportedMedia, MAX_INPUT_BYTES, splitAudio } from '../media/prepareAudio';
-import { RateLimiter } from '../utils/rateLimiter';
-import { parseAudioTranscription } from '../transcripts/metadata';
-import { joinCueText, mergeTranscriptCues } from '../transcripts/output';
-import { stitchTranscriptions } from '../utils/stitching';
+import { PROVIDER_NAMES } from '../providers/availability';
+import { prepareBackgroundWorker, runPreparedAudio } from '../transcription/background';
+import { assembleTranscript, transcribePart } from '../transcription/processAudio';
+import {
+  listWork, readWork, readReceipt, saveWork, saveAudio, setWorkMode, removeWork, workLock, workSettings,
+  type StoredWork, type Transcript, type WorkConfig,
+} from '../transcription/workStorage';
 
 type QueueStatus = 'idle' | 'processing' | 'paused';
 type Log = (message: string, type: 'info' | 'error') => void;
 
-interface Checkpoint {
-  settings: string;
-  segments: AudioChunk[];
-  results: TranscriptionResult[];
-}
-
 interface QueueFile {
   file: File;
-  checkpoint?: Checkpoint;
+  config?: WorkConfig;
+  saved?: Promise<boolean>;
+  modeChange?: Promise<unknown>;
+  retryInterrupted?: boolean;
+  checkpoint?: { settings: string; segments: AudioChunk[]; results: TranscriptionResult[] };
 }
 
 interface QueueConfig {
@@ -43,43 +41,10 @@ function describeError(error: unknown, provider: string): string {
   return message;
 }
 
-async function transcribeSegment(
-  data: Uint8Array, name: string, config: ApiConfig, limiter: RateLimiter, onLog: Log,
-): Promise<TranscriptionResult> {
-  const audio = new File([data], name, { type: 'audio/mp3' });
-  await limiter.acquire();
-  try {
-    let result: TranscriptionResult;
-    if (config.selectedApi === 'groq') {
-      const client = new Groq({ apiKey: config.groqKey.trim(), dangerouslyAllowBrowser: true });
-      const response = await client.audio.transcriptions.create({
-        file: audio, model: config.groqModel, response_format: 'verbose_json', timestamp_granularities: ['word', 'segment'],
-      });
-      result = parseAudioTranscription(response);
-    } else if (config.selectedApi === 'google') {
-      result = await transcribeGoogleAudio(config.googleKey.trim(), config.googleModel, audio, message => onLog(message, 'error'));
-    } else {
-      const client = new OpenAI({ apiKey: config.openaiKey.trim(), dangerouslyAllowBrowser: true });
-      const response = await client.audio.transcriptions.create({
-        file: audio,
-        model: config.openaiModel,
-        ...(config.openaiModel === 'gpt-4o-transcribe-diarize'
-          ? { response_format: 'diarized_json' as const, chunking_strategy: 'auto' as const }
-          : config.openaiModel === 'whisper-1'
-            ? { response_format: 'verbose_json' as const, timestamp_granularities: ['word', 'segment'] }
-            : {}),
-      });
-      result = parseAudioTranscription(response);
-    }
-    limiter.onSuccess();
-    return result;
-  } catch (error) {
-    const status = (error as { status?: number } | null)?.status;
-    if (status === 429 || /\b429\b/.test(String(error))) limiter.on429();
-    throw error;
-  } finally {
-    limiter.release();
-  }
+function getWorkConfig(config: ApiConfig): WorkConfig {
+  const { selectedApi, sampleRate, maxFileSizeMB } = config;
+  const model = { google: config.googleModel, groq: config.groqModel, openai: config.openaiModel }[selectedApi];
+  return { selectedApi, model, sampleRate, maxFileSizeMB };
 }
 
 export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, ensureProviderAvailable, onLog }: QueueConfig) {
@@ -89,7 +54,6 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
   const statusRef = useRef<QueueStatus>('idle');
   const files = useRef(new Map<string, QueueFile>());
   const active = useRef(new Set<string>());
-  const limiter = useRef(new RateLimiter(10));
 
   const changeJobs = useCallback((update: (previous: FileJob[]) => FileJob[]) => {
     jobsRef.current = update(jobsRef.current);
@@ -116,7 +80,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
         onLog('"' + file.name + '" exceeds the browser audio tools’ 2 GiB input limit. Split it before adding it.', 'error');
         continue;
       }
-      const id = 'media-' + Math.random().toString(36).slice(2);
+      const id = 'media-' + (crypto.randomUUID?.() ?? Math.random().toString(36).slice(2));
       added.push({
         id, fileName: file.name, fileSize: file.size, mimeType: file.type,
         status: 'ready', progress: 0, addedAt: Date.now(),
@@ -128,69 +92,154 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
     return added.map(job => job.id);
   }, [changeJobs, onLog]);
 
+  const changeSavedMode = useCallback((item: QueueFile, id: string, mode: 'active' | 'paused') => {
+    if (!item.saved) return;
+    item.modeChange = (item.modeChange ?? item.saved).then(async () => {
+      if (await item.saved) await setWorkMode(id, mode);
+    }).catch(() => onLog('Could not save the queue state for "' + item.file.name + '".', 'error'));
+  }, [onLog]);
+
+  const stage = useCallback((job: FileJob) => {
+    const item = files.current.get(job.id);
+    const runtime = apiConfigRef.current;
+    if (!item || !runtime || !navigator.locks) return;
+    if (item.saved) {
+      if (job.status === 'error') item.retryInterrupted = true;
+      changeSavedMode(item, job.id, statusRef.current === 'paused' ? 'paused' : 'active');
+      return;
+    }
+    const config = getWorkConfig(runtime);
+    item.config = config;
+    void prepareBackgroundWorker();
+    const { id, fileName, fileSize, mimeType, addedAt } = job;
+    const record: StoredWork = {
+      job: { id, fileName, fileSize, mimeType, addedAt }, config, file: item.file,
+      mode: statusRef.current === 'paused' ? 'paused' : 'active',
+    };
+    item.saved = saveWork(record).then(() => true).catch(() => {
+      onLog('Browser storage could not save "' + fileName + '". Keep this tab open while it transcribes.', 'info');
+      return false;
+    });
+  }, [apiConfigRef, changeSavedMode, onLog]);
+
   const processJob = useCallback(async (id: string) => {
     const item = files.current.get(id);
-    const config = apiConfigRef.current;
-    if (!item || !config) return;
+    const runtime = apiConfigRef.current;
+    if (!item || !runtime) return;
     const { file } = item;
-    const provider = {
-      google: { name: 'Google', key: config.googleKey, model: config.googleModel },
-      groq: { name: 'Groq', key: config.groqKey, model: config.groqModel },
-      openai: { name: 'OpenAI', key: config.openaiKey, model: config.openaiModel },
-    }[config.selectedApi];
-    const settings = JSON.stringify([config.selectedApi, provider.model, config.sampleRate, config.maxFileSizeMB]);
+    const config = item.config ?? getWorkConfig(runtime);
+    const key = { google: runtime.googleKey, groq: runtime.groqKey, openai: runtime.openaiKey }[config.selectedApi].trim();
+    const provider = { provider: config.selectedApi, model: config.model, key };
+    const settings = workSettings(config);
     const pauseAtCheckpoint = () => {
       if (statusRef.current !== 'paused') return false;
       updateJob(id, { status: 'queued' });
       return true;
     };
+    const report = (done: number, total: number) => {
+      updateJob(id, { status: 'transcribing', segmentCount: total, segmentsTranscribed: done, progress: Math.round(45 + 45 * done / total) });
+    };
+    const onWarning = (message: string) => onLog(message, 'error');
+    const complete = (transcript: Transcript) => {
+      updateJob(id, { status: 'done', progress: 100, ...transcript });
+      files.current.delete(id);
+      onLog('"' + file.name + '" transcription complete.', 'info');
+    };
+    const prepare = async () => {
+      updateJob(id, { status: 'converting', progress: 10, segmentCount: undefined, segmentsTranscribed: 0 });
+      const { instance, release } = await acquire();
+      try {
+        if (pauseAtCheckpoint()) return;
+        const data = await convertAudio(instance, file, id, config.sampleRate,
+          track => onLog('"' + file.name + '": using audio track ' + track + ' because earlier tracks were silent.', 'info'));
+        updateJob(id, { status: 'splitting', progress: 35 });
+        return await splitAudio(instance, data, id, {
+          ...runtime, ...config, openaiModel: config.selectedApi === 'openai' ? config.model : runtime.openaiModel,
+        });
+      } finally {
+        release();
+      }
+    };
 
+    let durable: boolean | undefined;
+    let dispatched = false;
     try {
-      const key = provider.key.trim();
+      await item.modeChange;
+      durable = await item.saved;
+      if (durable) {
+        // The file may already have finished in a worker launched by an earlier page.
+        const stored = await readWork(id);
+        if (stored?.mode === 'done' && stored.transcript) {
+          complete(stored.transcript);
+          return;
+        }
+        const receipt = await readReceipt(id);
+        const finished = stored?.segmentCount && receipt?.settings === settings && receipt.results.length === stored.segmentCount;
+        if (!finished) await ensureProviderAvailable(config.selectedApi, key);
+        if (pauseAtCheckpoint()) return;
+
+        const segmentCount = stored?.segmentCount ?? await navigator.locks.request('transcriber-prepare:' + id, async () => {
+          const existing = await readWork(id);
+          if (existing?.segmentCount) return existing.segmentCount;
+          const segments = await prepare();
+          if (!segments) return;
+          try {
+            await saveAudio(id, settings, segments);
+          } catch {
+            await removeWork(id);
+            item.saved = Promise.resolve(false);
+            item.checkpoint = { settings, segments, results: [] };
+            durable = false;
+            onLog('Browser storage ran out of space. Keep this tab open while "' + file.name + '" transcribes.', 'info');
+          }
+          return segments.length;
+        });
+        if (!segmentCount || pauseAtCheckpoint()) return;
+        if (durable) {
+          if (!finished) await ensureProviderAvailable(config.selectedApi, key);
+          report(receipt?.results.length ?? 0, segmentCount);
+          dispatched = true;
+          const outcome = await runPreparedAudio({ id, key, retryInterrupted: !!item.retryInterrupted }, report, onWarning);
+          item.retryInterrupted = false;
+          if (outcome.state === 'done') complete(outcome.transcript);
+          else {
+            await item.modeChange;
+            const current = await readWork(id);
+            if (current?.mode === 'done' && current.transcript) complete(current.transcript);
+            else if (current?.mode === 'failed') {
+              updateJob(id, { status: 'error', error: 'Progress was saved. Retry to submit the unfinished part again.' });
+            } else if (!pauseAtCheckpoint()) {
+              if (!current) item.saved = Promise.resolve(false);
+              updateJob(id, { status: current?.mode === 'active' ? 'queued' : 'ready' });
+            }
+          }
+          return;
+        }
+      }
+
       await ensureProviderAvailable(config.selectedApi, key);
       if (pauseAtCheckpoint()) return;
       if (item.checkpoint?.settings !== settings) {
-        item.checkpoint = undefined;
-        updateJob(id, { status: 'converting', progress: 10, segmentCount: undefined, segmentsTranscribed: 0 });
-        const { instance, release } = await acquire();
-        try {
-          if (pauseAtCheckpoint()) return;
-          const data = await convertAudio(instance, file, id, config.sampleRate,
-            track => onLog('"' + file.name + '": using audio track ' + track + ' because earlier tracks were silent.', 'info'));
-          updateJob(id, { status: 'splitting', progress: 35 });
-          const segments = await splitAudio(instance, data, id, config);
-          item.checkpoint = { settings, segments, results: [] };
-        } finally {
-          release();
-        }
+        const segments = await prepare();
+        if (!segments) return;
+        item.checkpoint = { settings, segments, results: [] };
       }
-
       const { segments, results } = item.checkpoint;
       await ensureProviderAvailable(config.selectedApi, key);
-      const progress = () => Math.round(45 + 45 * results.length / segments.length);
-      updateJob(id, { status: 'transcribing', segmentCount: segments.length, segmentsTranscribed: results.length, progress: progress() });
-      const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      report(results.length, segments.length);
       for (let index = results.length; index < segments.length; index++) {
         if (pauseAtCheckpoint()) return;
-        const result = await transcribeSegment(segments[index].data, filename + '_seg' + index + '.mp3', config, limiter.current, onLog);
-        if (!result.text.trim()) {
-          throw new Error('The provider returned no speech for part ' + (index + 1) + '. Check that the audio contains speech, then retry.');
-        }
-        results.push(result);
-        updateJob(id, { segmentsTranscribed: results.length, progress: progress() });
+        results.push(await transcribePart(segments[index].data, file.name, index, provider, onWarning));
+        report(results.length, segments.length);
       }
-      updateJob(id, { status: 'stitching', progress: 92 });
-      const transcriptCues = mergeTranscriptCues(results, segments);
-      const transcript = results.length === 1 ? results[0].text
-        : transcriptCues ? joinCueText(transcriptCues)
-          : segments[1].offset < segments[1].keepStart
-            ? stitchTranscriptions(results.map(result => result.text), (message, type) => onLog(message, type || 'info'))
-            : results.map(result => result.text.trim()).join('\n');
-      updateJob(id, { status: 'done', progress: 100, transcript, transcriptCues });
-      files.current.delete(id);
-      onLog('"' + file.name + '" transcription complete.', 'info');
+      complete(assembleTranscript(results, segments));
     } catch (error) {
-      const message = describeError(error, provider.name);
+      if (durable && !dispatched) {
+        await navigator.locks.request(workLock(id), { ifAvailable: true }, async lock => {
+          if (lock) await setWorkMode(id, 'failed');
+        }).catch(() => undefined);
+      }
+      const message = describeError(error, PROVIDER_NAMES[config.selectedApi]);
       updateJob(id, { status: 'error', error: message });
       onLog('"' + file.name + '": ' + message, 'error');
     }
@@ -216,35 +265,77 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
     if (!active.current.size && statusRef.current !== 'idle') changeStatus('idle');
   }, [changeStatus, processJob]);
 
+  useEffect(() => {
+    if (!navigator.locks) return;
+    let cancelled = false;
+    void listWork().then(records => {
+      if (cancelled || !records?.length) return;
+      const known = new Set(jobsRef.current.map(job => job.id));
+      const restored: FileJob[] = [];
+      for (const work of records.sort((a, b) => a.job.addedAt - b.job.addedAt)) {
+        if (known.has(work.job.id)) continue;
+        if (work.mode === 'done' && work.transcript) {
+          restored.push({ ...work.job, ...work.transcript, progress: 100, status: 'done' });
+        } else if (work.file) {
+          files.current.set(work.job.id, { file: work.file, config: work.config, saved: Promise.resolve(true) });
+          const status = work.mode === 'active' ? 'queued' : work.mode === 'paused' ? 'ready' : 'error';
+          restored.push({ ...work.job, status, progress: 0,
+            error: status === 'error' ? 'Progress was saved. Retry to submit the unfinished part again.' : undefined });
+        }
+      }
+      if (restored.length) changeJobs(previous => [...restored, ...previous]);
+      pump();
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [changeJobs, pump]);
+
   const startAll = useCallback(() => {
+    for (const job of jobsRef.current) if (job.status === 'ready') stage(job);
     changeJobs(all => all.map(job => job.status === 'ready' ? { ...job, status: 'queued' } : job));
     pump();
-  }, [changeJobs, pump]);
+  }, [changeJobs, pump, stage]);
 
   const startJob = useCallback((id: string) => {
     if (active.current.has(id)) return;
     const job = jobsRef.current.find(candidate => candidate.id === id);
     if (job && (job.status === 'ready' || job.status === 'queued' || job.status === 'error')) {
+      stage(job);
       updateJob(id, { status: 'queued', error: undefined });
       pump();
     }
-  }, [pump, updateJob]);
+  }, [pump, stage, updateJob]);
 
-  const pause = useCallback(() => changeStatus('paused'), [changeStatus]);
+  const pause = useCallback(() => {
+    changeStatus('paused');
+    for (const job of jobsRef.current) {
+      const item = files.current.get(job.id);
+      if (item && (job.status === 'queued' || active.current.has(job.id))) changeSavedMode(item, job.id, 'paused');
+    }
+  }, [changeSavedMode, changeStatus]);
 
   const resume = useCallback(() => {
+    for (const job of jobsRef.current) {
+      const item = files.current.get(job.id);
+      if (item && (job.status === 'queued' || active.current.has(job.id))) changeSavedMode(item, job.id, 'active');
+    }
     changeStatus('idle');
     pump();
-  }, [changeStatus, pump]);
+  }, [changeSavedMode, changeStatus, pump]);
 
   const removeJob = useCallback((id: string) => {
     if (active.current.has(id)) return;
+    const item = files.current.get(id);
+    if (item?.saved) void item.saved.then(saved => saved && removeWork(id)).catch(() => onLog('Could not remove saved audio.', 'error'));
+    else if (jobsRef.current.some(job => job.id === id && job.status === 'done')) void removeWork(id).catch(() => undefined);
     files.current.delete(id);
     changeJobs(previous => previous.filter(job => job.id !== id));
     pump();
-  }, [changeJobs, pump]);
+  }, [changeJobs, onLog, pump]);
 
   const clearCompleted = useCallback(() => {
+    for (const job of jobsRef.current) {
+      if (job.status === 'done') void removeWork(job.id).catch(() => undefined);
+    }
     changeJobs(previous => previous.filter(job => job.status !== 'done'));
   }, [changeJobs]);
 

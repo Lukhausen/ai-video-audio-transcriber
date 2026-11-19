@@ -34,6 +34,8 @@ Turn audio or video files into transcripts, then use an AI model to summarize, r
   - Draft recordings are cached locally so an interrupted recording can be recovered and transcribed.
 
 - **Local browser persistence**
+  - Chrome can transcribe prepared audio in a background service worker. If the browser suspends or reloads the page, started jobs recover their saved audio and completed parts.
+  - An interrupted provider request with an unknown outcome requires a manual retry.
   - API provider, model choices, automation settings, and saved instructions are stored locally.
   - The last transcript from the browser is cached for quick access after reopening the page.
 
@@ -62,6 +64,7 @@ Model choices were checked on 2026-10-04 against the [OpenAI model catalog](http
 There is no persistent custom backend server for your files.
 
 - Files are selected, converted, split, recorded, and cached in the browser.
+- Started jobs keep their source and prepared audio in browser storage until transcription finishes or the job is removed. Completed transcripts remain available locally.
 - Google audio segments are uploaded directly to the Gemini Files API and deleted after each transcription attempt. If deletion fails, the app reports it; Google expires uploaded files after 48 hours. Google interactions use `store: false`.
 - API keys are stored in the browser's local storage.
 - Transcription and AI transformation calls are sent directly from the browser to the selected provider, Groq, OpenAI, or Google, using your API key.
