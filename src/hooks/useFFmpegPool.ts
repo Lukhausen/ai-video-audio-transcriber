@@ -1,110 +1,77 @@
-// FFmpeg WASM pool — manages multiple instances for parallel conversion
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 
-interface PoolEntry {
-  instance: FFmpeg;
+export const AUDIO_WORKERS = 2;
+const LOAD_TIMEOUT_MS = 90_000;
+
+interface WorkerSlot {
+  index: number;
+  instance?: FFmpeg;
   busy: boolean;
 }
 
-export interface FFmpegPoolHandle {
-  isReady: boolean;
-  acquire: () => Promise<{ instance: FFmpeg; release: () => void }>;
-  terminateAll: () => Promise<void>;
+interface WorkerWaiter {
+  resolve: (slot: WorkerSlot) => void;
+  reject: (error: Error) => void;
 }
 
-export function useFFmpegPool(
-  poolSize: number = 2,
-  onLog?: (msg: string, type: 'info' | 'error') => void
-): FFmpegPoolHandle {
-  const poolRef = useRef<PoolEntry[]>([]);
-  const [isReady, setIsReady] = useState(false);
-  const waitingRef = useRef<Array<(entry: PoolEntry) => void>>([]);
-  const onLogRef = useRef(onLog);
-  onLogRef.current = onLog;
+export interface FFmpegPoolHandle {
+  acquire: () => Promise<{ instance: FFmpeg; release: () => void }>;
+}
 
-  useEffect(() => {
-    let cancelled = false;
+export function useFFmpegPool(onLog: (message: string, type: 'info' | 'error') => void): FFmpegPoolHandle {
+  const [pool] = useState(() => ({
+    slots: Array.from({ length: AUDIO_WORKERS }, (_, index): WorkerSlot => ({ index, busy: false })),
+    waiters: [] as WorkerWaiter[],
+  }));
 
-    const initPool = async () => {
-      const entries: PoolEntry[] = [];
-      for (let i = 0; i < poolSize; i++) {
-        const ffmpeg = new FFmpeg();
-        ffmpeg.on('log', ({ message }) => {
-          onLogRef.current?.(`FFmpeg[${i}]: ${message}`, 'info');
-        });
-        try {
-          await ffmpeg.load({
-            coreURL: `${window.location.origin}/ffmpeg/ffmpeg-core.js`,
-            wasmURL: `${window.location.origin}/ffmpeg/ffmpeg-core.wasm`,
-            workerURL: `${window.location.origin}/ffmpeg/worker.js`,
-          });
-          entries.push({ instance: ffmpeg, busy: false });
-          onLogRef.current?.(`FFmpeg instance ${i + 1}/${poolSize} loaded.`, 'info');
-        } catch (err) {
-          onLogRef.current?.(`Failed to load FFmpeg instance ${i + 1}: ${err}`, 'error');
-        }
-      }
-
-      if (!cancelled) {
-        poolRef.current = entries;
-        setIsReady(entries.length > 0);
-        onLogRef.current?.(`FFmpeg pool ready (${entries.length}/${poolSize} instances).`, 'info');
-      }
-    };
-
-    initPool();
-
-    return () => {
-      cancelled = true;
-      poolRef.current.forEach(entry => {
-        try { entry.instance.terminate(); } catch { /* ignore */ }
-      });
-      poolRef.current = [];
-    };
-  }, [poolSize]);
-
-  const releaseEntry = useCallback((entry: PoolEntry) => {
-    entry.busy = false;
-    // Check if anyone is waiting
-    if (waitingRef.current.length > 0) {
-      const next = waitingRef.current.shift()!;
-      entry.busy = true;
-      next(entry);
+  useEffect(() => () => {
+    for (const waiter of pool.waiters.splice(0)) waiter.reject(new Error('Audio tools closed.'));
+    for (const slot of pool.slots) {
+      slot.instance?.terminate();
+      slot.instance = undefined;
+      slot.busy = false;
     }
-  }, []);
+  }, [pool]);
 
-  const acquire = useCallback((): Promise<{ instance: FFmpeg; release: () => void }> => {
-    return new Promise((resolve) => {
-      const idle = poolRef.current.find(e => !e.busy);
-
-      if (idle) {
-        idle.busy = true;
-        resolve({
-          instance: idle.instance,
-          release: () => releaseEntry(idle),
-        });
-      } else {
-        // All busy, enqueue
-        waitingRef.current.push((entry) => {
-          resolve({
-            instance: entry.instance,
-            release: () => releaseEntry(entry),
-          });
-        });
+  const acquire = useCallback(async () => {
+    const slot = await new Promise<WorkerSlot>((resolve, reject) => {
+      const idle = pool.slots.find(candidate => !candidate.busy);
+      if (!idle) {
+        pool.waiters.push({ resolve, reject });
+        return;
       }
+      idle.busy = true;
+      resolve(idle);
     });
-  }, [releaseEntry]);
+    const release = () => {
+      const next = pool.waiters.shift();
+      if (next) next.resolve(slot);
+      else slot.busy = false;
+    };
 
-  const terminateAll = useCallback(async () => {
-    // Clear waiting queue
-    waitingRef.current = [];
-    for (const entry of poolRef.current) {
-      try { entry.instance.terminate(); } catch { /* ignore */ }
+    if (slot.instance) return { instance: slot.instance, release };
+
+    const instance = new FFmpeg();
+    slot.instance = instance;
+    instance.on('log', ({ message }) => onLog('FFmpeg[' + slot.index + ']: ' + message, 'info'));
+    const timeout = window.setTimeout(() => instance.terminate(), LOAD_TIMEOUT_MS);
+    try {
+      await instance.load({
+        coreURL: new URL(import.meta.env.BASE_URL + 'ffmpeg/ffmpeg-core.js', window.location.href).href,
+        wasmURL: new URL(import.meta.env.BASE_URL + 'ffmpeg/ffmpeg-core.wasm', window.location.href).href,
+      });
+      return { instance, release };
+    } catch (error) {
+      instance.terminate();
+      slot.instance = undefined;
+      release();
+      onLog('Could not load FFmpeg worker ' + (slot.index + 1) + ' (' + String(error) + ').', 'error');
+      throw new Error('Could not load the audio tools. Check your connection, then retry this file.');
+    } finally {
+      window.clearTimeout(timeout);
     }
-    poolRef.current = [];
-    setIsReady(false);
-  }, []);
+  }, [onLog, pool]);
 
-  return { isReady, acquire, terminateAll };
+  return { acquire };
 }

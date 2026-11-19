@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import defaultPrompts from '../defaultPrompts.json';
+import { readSetting, writeSetting } from '../utils/browserStorage';
 
 export interface PromptItem {
   text: string;
@@ -24,7 +25,7 @@ const promptKey = (text: string) => normalizePrompt(text).toLowerCase();
 export function usePromptGallery() {
   const [customPrompts, setCustomPrompts] = useState<PromptItem[]>(() => {
     try {
-      const stored = localStorage.getItem(CUSTOM_PROMPTS_KEY);
+      const stored = readSetting(CUSTOM_PROMPTS_KEY);
       const parsed = stored ? JSON.parse(stored) as PromptItem[] : [];
       return parsed.map(prompt => ({
         ...prompt,
@@ -39,7 +40,7 @@ export function usePromptGallery() {
 
   const [promptUsage, setPromptUsage] = useState<PromptUsage>(() => {
     try {
-      const stored = localStorage.getItem(PROMPT_USAGE_KEY);
+      const stored = readSetting(PROMPT_USAGE_KEY);
       return stored ? JSON.parse(stored) as PromptUsage : {};
     } catch (error) {
       console.error('Error loading prompt usage:', error);
@@ -48,11 +49,11 @@ export function usePromptGallery() {
   });
 
   useEffect(() => {
-    localStorage.setItem(CUSTOM_PROMPTS_KEY, JSON.stringify(customPrompts));
+    writeSetting(CUSTOM_PROMPTS_KEY, JSON.stringify(customPrompts));
   }, [customPrompts]);
 
   useEffect(() => {
-    localStorage.setItem(PROMPT_USAGE_KEY, JSON.stringify(promptUsage));
+    writeSetting(PROMPT_USAGE_KEY, JSON.stringify(promptUsage));
   }, [promptUsage]);
 
   const combinedPrompts = useMemo(() => {

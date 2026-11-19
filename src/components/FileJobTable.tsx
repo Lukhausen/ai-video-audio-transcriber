@@ -1,5 +1,5 @@
 // File job table — container for all file job rows with batch actions
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import JSZip from 'jszip';
 import { FaFileDownload } from 'react-icons/fa';
 import { BiSolidTrashAlt } from 'react-icons/bi';
@@ -14,7 +14,6 @@ interface FileJobTableProps {
   outputOptions: OutputOptions;
   onOutputOptionsChange: (options: OutputOptions) => void;
   globalStatus: 'idle' | 'processing' | 'paused';
-  isTranscriptionReady: boolean;
   onStartAll: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -31,7 +30,6 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
   outputOptions,
   onOutputOptionsChange,
   globalStatus,
-  isTranscriptionReady,
   onStartAll,
   onPause,
   onResume,
@@ -49,11 +47,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
   const isProcessing = globalStatus === 'processing';
   const isPaused = globalStatus === 'paused';
   const hasPendingActions = hasPending || isProcessing || isPaused;
-  const [showCompleted, setShowCompleted] = useState(pendingJobs.length === 0);
-
-  useEffect(() => {
-    setShowCompleted(pendingJobs.length === 0);
-  }, [pendingJobs.length]);
+  const [showCompleted, setShowCompleted] = useState(true);
 
   const handleDownloadAll = useCallback(async () => {
     if (completedJobs.length === 0) return;
@@ -68,9 +62,16 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
 
     // Multiple files — create zip
     const zip = new JSZip();
+    const usedNames = new Set<string>();
     for (const job of completedJobs) {
       const baseName = job.fileName.replace(/\.[^.]+$/, '');
-      zip.file(`${baseName}-transcript.txt`, formatTranscript(job, outputOptions));
+      let name = baseName + '-transcript.txt';
+      let suffix = 2;
+      while (usedNames.has(name.normalize('NFC').toLowerCase())) {
+        name = baseName + ' (' + suffix++ + ')-transcript.txt';
+      }
+      usedNames.add(name.normalize('NFC').toLowerCase());
+      zip.file(name, formatTranscript(job, outputOptions));
     }
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
@@ -98,12 +99,10 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
 
   const renderPendingActions = () => (
     <div className="job-table-section-actions">
-      {hasPending && !isProcessing && (
-        <button className="btn-standard btn-primary-action" onClick={onStartAll} disabled={!isTranscriptionReady}>
+      {hasPending && !isProcessing && !isPaused && (
+        <button className="btn-standard btn-primary-action" onClick={onStartAll}>
           <TbFileTextAi />
-          {isTranscriptionReady
-            ? 'Transcribe all pending files'
-            : 'Loading audio tools...'}
+          Transcribe all pending files
         </button>
       )}
       {isProcessing && (
@@ -170,7 +169,7 @@ const FileJobTable: React.FC<FileJobTableProps> = ({
               )}
               {renderCompletedActions()}
             </div>
-            {showCompleted && renderRows(completedJobs)}
+            {(showCompleted || pendingJobs.length === 0) && renderRows(completedJobs)}
           </section>
         )}
       </div>

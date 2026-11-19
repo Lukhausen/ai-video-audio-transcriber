@@ -35,9 +35,14 @@
     "eslint": "^8.45.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
-    "knip": "^5.43.6",
+    "knip": "^6.46.1",
     "typescript": "^5.0.2",
     "vite": "^4.5.2",
     "vite-plugin-deadfile": "^1.3.0"
+  },
+  "overrides": {
+    "openai": {
+      "zod": "4.6.6"
+    }
   }
 }

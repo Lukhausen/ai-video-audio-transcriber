@@ -40,12 +40,13 @@ async function withStore<T>(
     const transaction = db.transaction(STORE_NAME, mode);
     const request = run(transaction.objectStore(STORE_NAME));
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-    transaction.oncomplete = () => db.close();
-    transaction.onerror = () => {
+    transaction.oncomplete = () => {
       db.close();
-      reject(transaction.error);
+      resolve(request.result);
+    };
+    transaction.onabort = () => {
+      db.close();
+      reject(transaction.error ?? new Error('The recording could not be saved.'));
     };
   });
 }
@@ -64,16 +65,18 @@ export async function getDraftRecording(): Promise<CachedRecording | undefined> 
 }
 
 export async function saveCachedRecording(record: CachedRecording): Promise<void> {
-  const records = await getCachedRecordings();
-  await Promise.all(records.filter(item => item.id !== record.id).map(item => deleteCachedRecording(item.id)));
-  await withStore<IDBValidKey>('readwrite', store => store.put({ ...record, status: 'draft' }));
+  await withStore<CachedRecording[]>('readwrite', store => {
+    const previous = store.getAll() as IDBRequest<CachedRecording[]>;
+    previous.onsuccess = () => {
+      if (previous.result.some(item => item.createdAt > record.createdAt ||
+        (item.id === record.id && item.durationMs > record.durationMs))) return;
+      for (const item of previous.result) if (item.id !== record.id) store.delete(item.id);
+      store.put(record);
+    };
+    return previous;
+  });
 }
 
 export async function deleteCachedRecording(id: string): Promise<void> {
   await withStore<undefined>('readwrite', store => store.delete(id));
-}
-
-export async function deleteDraftRecording(): Promise<void> {
-  const draft = await getDraftRecording();
-  if (draft) await deleteCachedRecording(draft.id);
 }

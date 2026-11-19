@@ -5,28 +5,78 @@ export function hasTimestamp(cue: TranscriptCue): boolean {
 }
 
 export function joinCueText(cues: TranscriptCue[]): string {
-  return cues.map(cue => cue.text.trim()).filter(Boolean).join(' ').replace(/\s+([,.;:!?])/g, '$1');
+  return cues.map(cue => cue.text.trim()).filter(Boolean).join(' ')
+    .replace(/\s+([,.;:!?、。！？])/g, '$1')
+    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]) (?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])/gu, '$1');
 }
 
-// Use the split's ownership boundaries to remove overlapping words. Speaker IDs
-// belong to one provider request; never imply the same voice across separate parts.
+const speech = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, '');
+const midpoint = (cue: TranscriptCue) => cue.start === undefined ? undefined : (cue.start + (cue.end ?? cue.start)) / 2;
+const TIMESTAMP_TOLERANCE = 1.5;
+
+function mergeOverlap(previous: TranscriptCue[], current: TranscriptCue[], chunk: AudioChunk): TranscriptCue[] {
+  const overlap = chunk.keepStart - chunk.offset;
+  if (overlap <= 0) return previous.concat(current);
+
+  const start = chunk.offset - TIMESTAMP_TOLERANCE;
+  const end = chunk.keepStart + overlap + TIMESTAMP_TOLERANCE;
+  const leftStart = previous.findIndex(cue => (midpoint(cue) ?? -Infinity) >= start);
+  const rightEnd = current.findIndex(cue => (midpoint(cue) ?? -Infinity) > end);
+  if (leftStart === -1 || rightEnd === 0) return previous.concat(current);
+  const left = previous.slice(leftStart);
+  const right = rightEnd === -1 ? current : current.slice(0, rightEnd);
+  if (left.length * right.length > 40_000) return previous.concat(current);
+
+  const keys = [left.map(cue => speech(cue.text)), right.map(cue => speech(cue.text))];
+  const times = [left.map(midpoint), right.map(midpoint)];
+  const sameWord = (i: number, j: number) => {
+    const a = times[0][i];
+    const b = times[1][j];
+    return Boolean(keys[0][i] && keys[0][i] === keys[1][j] && a !== undefined && b !== undefined &&
+      a <= end && b >= start && Math.abs(a - b) <= TIMESTAMP_TOLERANCE);
+  };
+
+  // Align words in the overlap before removing duplicates. A timestamp by itself
+  // can't establish that the other response contains this word.
+  const matches = Array.from({ length: left.length + 1 }, () => new Uint16Array(right.length + 1));
+  for (let i = left.length - 1; i >= 0; i--) {
+    for (let j = right.length - 1; j >= 0; j--) {
+      matches[i][j] = sameWord(i, j) ? 1 + matches[i + 1][j + 1] : Math.max(matches[i + 1][j], matches[i][j + 1]);
+    }
+  }
+  const merged = previous.slice(0, leftStart);
+  let i = 0;
+  let j = 0;
+  while (i < left.length && j < right.length) {
+    if (sameWord(i, j)) {
+      merged.push((times[1][j] ?? 0) >= chunk.keepStart ? right[j] : left[i]);
+      i++;
+      j++;
+    } else if (matches[i + 1][j] > matches[i][j + 1] ||
+      (matches[i + 1][j] === matches[i][j + 1] && (times[0][i] ?? -Infinity) <= (times[1][j] ?? Infinity))) {
+      merged.push(left[i++]);
+    } else {
+      merged.push(right[j++]);
+    }
+  }
+  return merged.concat(left.slice(i), right.slice(j), rightEnd === -1 ? [] : current.slice(rightEnd));
+}
+
 export function mergeTranscriptCues(results: TranscriptionResult[], chunks: AudioChunk[]): TranscriptCue[] | undefined {
-  const speech = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   // Incomplete annotations must never replace a complete transcript with partial text.
   if (results.some(result => result.text.trim() && (
     !result.cues?.length || speech(result.text) !== speech(joinCueText(result.cues))
   ))) return undefined;
-  const cues = results.flatMap((result, index) => {
+  const cues = results.reduce<TranscriptCue[]>((merged, result, index) => {
     const chunk = chunks[index];
-    return (result.cues || []).flatMap(cue => {
+    const absolute = (result.cues || []).map(cue => {
       const start = hasTimestamp(cue) ? cue.start! + chunk.offset : undefined;
       const end = typeof cue.end === 'number' && Number.isFinite(cue.end) ? cue.end + chunk.offset : start;
-      const midpoint = start === undefined ? undefined : (start + (end ?? start)) / 2;
-      if (midpoint !== undefined && (midpoint < chunk.keepStart || midpoint >= chunk.keepEnd)) return [];
-      return [{ ...cue, start, end,
-        speaker: cue.speaker && chunks.length > 1 ? `Part ${index + 1} / ${cue.speaker}` : cue.speaker }];
+      return { ...cue, start, end,
+        speaker: cue.speaker && chunks.length > 1 ? 'Part ' + (index + 1) + ' / ' + cue.speaker : cue.speaker };
     });
-  });
+    return index ? mergeOverlap(merged, absolute, chunk) : absolute;
+  }, []);
   return cues.length ? cues : undefined;
 }
 

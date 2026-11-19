@@ -12,3 +12,4 @@
 - Show timestamp and speaker switches only in the recent-transcript top bar; they also update expanded transcripts without collapsing them.
 - Hide each transcript output switch when none of the displayed transcripts has matching metadata; show only the available timestamp and speaker controls instead of disabled controls.
 - Deploy the website automatically when changes are pushed to `prod`, using the dedicated Hetzner FTP account; other branches do not publish the site.
+- Keep recovered audio until valid replacement audio is saved, retain completed chunks across pause and retry, and export every completed transcript even when source basenames collide. Report missing or damaged audio explicitly and keep completed results visible when another file fails.

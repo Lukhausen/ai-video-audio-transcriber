@@ -13,6 +13,7 @@ async function loadSource(path) {
 
 const { formatTranscript, formatTimestamp, mergeTranscriptCues, joinCueText } = await loadSource('../src/transcripts/output.ts');
 const { parseAudioTranscription } = await loadSource('../src/transcripts/metadata.ts');
+const { stitchTranscriptions } = await loadSource('../src/utils/stitching.ts');
 const job = { transcript: 'Hello there. Good morning.', transcriptCues: [
   { text: 'Hello', start: 0, end: 0.3, speaker: 'Speaker 1' },
   { text: 'there.', start: 0.3, end: 0.8, speaker: 'Speaker 1' },
@@ -63,6 +64,43 @@ test('partial annotations cannot discard the rest of a transcript', () => {
   const chunks = [{ offset: 0, keepStart: 0, keepEnd: Infinity }];
   assert.equal(mergeTranscriptCues([{ text: 'Complete speech', cues: [{ text: 'Complete', start: 0, end: 1 }] }], chunks), undefined);
   assert.equal(mergeTranscriptCues([{ text: 'Complete speech' }], chunks), undefined);
+});
+
+test('adjacent chunks reconcile words when timestamps disagree across the split', () => {
+  const chunks = [
+    { offset: 0, keepStart: 0, keepEnd: 30 },
+    { offset: 27, keepStart: 30, keepEnd: Infinity },
+  ];
+  for (const [leftStart, rightStart] of [[30.25, 2.2], [29.25, 3.2]]) {
+    const cues = mergeTranscriptCues([
+      { text: 'Before boundary', cues: [
+        { text: 'Before', start: 28, end: 28.25 },
+        { text: 'boundary', start: leftStart, end: leftStart + 0.3 },
+      ] },
+      { text: 'boundary unique After', cues: [
+        { text: 'boundary', start: rightStart, end: rightStart + 0.3 },
+        { text: 'unique', start: 2.9, end: 3 },
+        { text: 'After', start: 4, end: 4.3 },
+      ] },
+    ], chunks);
+    assert.equal(joinCueText(cues), 'Before boundary unique After');
+  }
+});
+
+test('contiguous chunks preserve repeated speech and formatted CJK cues preserve word spacing', () => {
+  const chunks = [{ offset: 0, keepStart: 0, keepEnd: 10 }, { offset: 10, keepStart: 10, keepEnd: Infinity }];
+  const cues = mergeTranscriptCues([
+    { text: 'Again', cues: [{ text: 'Again', start: 9.5, end: 9.9 }] },
+    { text: 'Again', cues: [{ text: 'Again', start: 0.2, end: 0.6 }] },
+  ], chunks);
+  assert.equal(joinCueText(cues), 'Again Again');
+  const chinese = { transcript: '你好世界。', transcriptCues: [{ text: '你好', start: 0 }, { text: '世界。', start: 0.7 }] };
+  assert.equal(formatTranscript(chinese, { timestamps: true, speakers: false }), '[00:00] 你好世界。');
+});
+
+test('plain text stitching removes a short exact overlap', () => {
+  assert.equal(stitchTranscriptions(['We should meet at noon tomorrow.', 'at noon tomorrow. Bring the notes.']),
+    'We should meet at noon tomorrow. Bring the notes.');
 });
 
 test('Whisper words and diarized segments normalize without fabricating timestamps', () => {

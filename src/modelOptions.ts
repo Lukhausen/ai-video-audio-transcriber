@@ -1,3 +1,5 @@
+import { readSetting } from './utils/browserStorage';
+
 export type ModelOption = {
   value: string;
   label: string;
@@ -41,6 +43,6 @@ export const GOOGLE_CHAT_MODELS: ModelOption[] = [
 ];
 
 export function getStoredModel(key: string, options: ModelOption[]): string {
-  const stored = localStorage.getItem(key);
+  const stored = readSetting(key);
   return options.some(option => option.value === stored) ? stored! : options[0].value;
 }

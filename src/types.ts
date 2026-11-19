@@ -1,11 +1,5 @@
 // Shared types for multi-file transcription pipeline
 
-export interface SegmentInfo {
-  filename: string;
-  size: number;
-  url?: string;
-}
-
 export type FileJobStatus =
   | 'ready'
   | 'queued'
@@ -73,5 +67,4 @@ export interface ApiConfig {
 export interface LogMessage {
   text: string;
   type: 'info' | 'error';
-  html?: boolean;
 }

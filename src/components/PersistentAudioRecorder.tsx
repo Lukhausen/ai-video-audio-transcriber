@@ -8,7 +8,6 @@ import { TbFileTextAi, TbPlayerPauseFilled, TbPlayerPlayFilled, TbPlayerStopFill
 import {
   CachedRecording,
   deleteCachedRecording,
-  deleteDraftRecording,
   getDraftRecording,
   saveCachedRecording,
 } from '../utils/recordingCache';
@@ -43,16 +42,22 @@ function createRecordingName(createdAt = Date.now(), extension = 'webm'): string
     String(date.getHours()).padStart(2, '0'),
     String(date.getMinutes()).padStart(2, '0'),
     String(date.getSeconds()).padStart(2, '0'),
+    String(date.getMilliseconds()).padStart(3, '0'),
   ].join('-');
 
   return `Recording_${stamp}.${extension}`;
 }
 
 function getRecordingMimeType(): string {
-  if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) return 'audio/webm;codecs=opus';
-  if (MediaRecorder.isTypeSupported('audio/webm')) return 'audio/webm';
-  if (MediaRecorder.isTypeSupported('audio/mp4')) return 'audio/mp4';
-  return '';
+  return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg']
+    .find(type => MediaRecorder.isTypeSupported?.(type)) ?? '';
+}
+
+function recordingExtension(mimeType: string): string {
+  if (mimeType.includes('mp4')) return 'm4a';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('wav')) return 'wav';
+  return 'webm';
 }
 
 function fileFromRecording(recording: CachedRecording): File {
@@ -73,6 +78,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [showRecoveredNotice, setShowRecoveredNotice] = useState(false);
+  const canRecord = typeof navigator.mediaDevices?.getUserMedia === 'function' && typeof MediaRecorder === 'function';
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -189,7 +195,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
   };
 
   const startRecording = async () => {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    if (!canRecord) {
       onLog('Recording is not supported in this browser.', 'error');
       return;
     }
@@ -197,8 +203,6 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
     setIsLoading(true);
 
     try {
-      await deleteDraftRecording();
-      setDraftRecording(undefined);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           autoGainControl: true,
@@ -207,39 +211,39 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
           noiseSuppression: true,
         },
       });
-      const mimeType = getRecordingMimeType();
-      const createdAt = Date.now();
-      const fileName = createRecordingName(createdAt, mimeType.includes('mp4') ? 'm4a' : 'webm');
-      const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
-      if (!AudioContextCtor) {
-        throw new Error('Audio processing is not supported in this browser.');
-      }
-      const audioContext = new AudioContextCtor();
-      const source = audioContext.createMediaStreamSource(stream);
-      const analyser = audioContext.createAnalyser();
-      const highPass = audioContext.createBiquadFilter();
-      const compressor = audioContext.createDynamicsCompressor();
-      const destination = audioContext.createMediaStreamDestination();
-
-      analyser.fftSize = 512;
-      highPass.type = 'highpass';
-      highPass.frequency.value = 80;
-      compressor.threshold.value = -32;
-      compressor.knee.value = 24;
-      compressor.ratio.value = 8;
-      compressor.attack.value = 0.003;
-      compressor.release.value = 0.25;
-
-      source.connect(analyser);
-      source.connect(highPass);
-      highPass.connect(compressor);
-      compressor.connect(destination);
-
-      const recorder = new MediaRecorder(destination.stream, mimeType ? { mimeType } : undefined);
-
       streamRef.current = stream;
-      audioContextRef.current = audioContext;
-      analyserRef.current = analyser;
+      const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
+      let input = stream;
+      if (AudioContextCtor) {
+        const audioContext = new AudioContextCtor();
+        audioContextRef.current = audioContext;
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        const highPass = audioContext.createBiquadFilter();
+        const compressor = audioContext.createDynamicsCompressor();
+        const destination = audioContext.createMediaStreamDestination();
+
+        analyser.fftSize = 512;
+        highPass.type = 'highpass';
+        highPass.frequency.value = 80;
+        compressor.threshold.value = -32;
+        compressor.knee.value = 24;
+        compressor.ratio.value = 8;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.25;
+
+        source.connect(analyser);
+        source.connect(highPass);
+        highPass.connect(compressor);
+        compressor.connect(destination);
+        analyserRef.current = analyser;
+        input = destination.stream;
+      }
+      const preferred = getRecordingMimeType();
+      const recorder = new MediaRecorder(input, preferred ? { mimeType: preferred } : undefined);
+      const mimeType = recorder.mimeType || preferred;
+      const createdAt = Date.now();
+      const fileName = createRecordingName(createdAt, recordingExtension(mimeType));
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       startedAtRef.current = createdAt;
@@ -255,6 +259,11 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
 
       recorder.ondataavailable = event => {
         if (event.data.size > 0) {
+          const active = activeRecordingRef.current;
+          if (active && event.data.type && event.data.type !== active.mimeType) {
+            active.mimeType = event.data.type;
+            active.fileName = createRecordingName(createdAt, recordingExtension(event.data.type));
+          }
           chunksRef.current.push(event.data);
           if (recorder.state === 'recording') {
             persistActiveRecording('draft').catch(() => onLog('Could not cache the latest recording chunk.', 'error'));
@@ -262,14 +271,23 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
         }
       };
 
+      recorder.onerror = event => {
+        const error = (event as Event & { error?: DOMException }).error;
+        onLog('Recording interrupted' + (error ? ': ' + error.message : '.'), 'error');
+      };
+
       recorder.onstop = async () => {
         try {
-          await persistActiveRecording('draft');
+          let cached = true;
+          await persistActiveRecording('draft').catch(() => {
+            cached = false;
+            onLog('The recording is available in this tab. The browser could not save a recovery copy.', 'error');
+          });
           const saved = activeRecordingRef.current;
           if (saved?.blob.size) {
             onRecordingReady(fileFromRecording({ ...saved, status: 'draft' }));
-            setDraftRecording(undefined);
-            onLog(`Saved recording "${saved.fileName}".`, 'info');
+            if (cached) setDraftRecording(undefined);
+            onLog('Added recording "' + saved.fileName + '".', 'info');
           }
         } catch (err: unknown) {
           onLog(`Could not save recording: ${getErrorMessage(err)}`, 'error');
@@ -277,6 +295,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
           setIsRecording(false);
           setElapsedMs(0);
           activeRecordingRef.current = null;
+          mediaRecorderRef.current = null;
           chunksRef.current = [];
           streamRef.current?.getTracks().forEach(track => track.stop());
           streamRef.current = null;
@@ -291,7 +310,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       recorder.start(1000);
       setElapsedMs(0);
       setIsRecording(true);
-      startWaveform(analyser);
+      if (analyserRef.current) startWaveform(analyserRef.current);
       timerRef.current = window.setInterval(() => {
         setElapsedMs(Date.now() - startedAtRef.current);
       }, 250);
@@ -302,6 +321,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       audioContextRef.current = null;
       streamRef.current?.getTracks().forEach(track => track.stop());
       streamRef.current = null;
+      mediaRecorderRef.current = null;
+      activeRecordingRef.current = null;
       onLog(`Could not start recording: ${getErrorMessage(err)}`, 'error');
     } finally {
       setIsLoading(false);
@@ -309,8 +330,8 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.requestData();
-    mediaRecorderRef.current?.stop();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
   };
 
   const stopPreview = () => {
@@ -350,8 +371,12 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
   const deleteRecording = async (id: string) => {
     stopPreview();
     setShowRecoveredNotice(false);
-    await deleteCachedRecording(id);
-    await refreshRecordings();
+    try {
+      await deleteCachedRecording(id);
+      await refreshRecordings();
+    } catch (error) {
+      onLog('Could not delete the recovered recording: ' + getErrorMessage(error), 'error');
+    }
   };
 
   return (
@@ -359,7 +384,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
       <button
         className={`voice-recorder-control ${isRecording ? 'is-recording' : ''}`}
         onClick={isRecording ? stopRecording : startRecording}
-        disabled={isLoading}
+        disabled={isLoading || !canRecord}
         type="button"
         aria-label={isRecording ? 'Stop recording and add audio to the file list' : 'Record audio'}
       >
@@ -371,7 +396,7 @@ const PersistentAudioRecorder: React.FC<PersistentAudioRecorderProps> = ({
             {isRecording ? 'Stop recording' : 'Record audio'}
           </span>
           <span className="voice-recorder-meta">
-            {isRecording ? 'Recording now' : 'Saved locally'}
+            {isRecording ? 'Recording now' : canRecord ? 'Saved locally' : 'Microphone unavailable. Upload a file.'}
           </span>
         </span>
         <span className="voice-recorder-monitor" aria-hidden="true">

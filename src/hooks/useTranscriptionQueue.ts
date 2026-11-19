@@ -1,615 +1,253 @@
-// Main processing orchestrator for multi-file transcription
-import { useReducer, useRef, useCallback } from 'react';
-import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
+import { useCallback, useRef, useState } from 'react';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import { transcribeGoogleAudio } from '../providers/google';
-import type { FileJob, ApiConfig, SegmentInfo, AudioChunk, TranscriptionResult } from '../types';
-import type { FFmpegPoolHandle } from './useFFmpegPool';
+import type { FileJob, ApiConfig, AudioChunk, TranscriptionResult } from '../types';
+import { AUDIO_WORKERS, type FFmpegPoolHandle } from './useFFmpegPool';
+import { convertAudio, isSupportedMedia, MAX_INPUT_BYTES, splitAudio } from '../media/prepareAudio';
 import { RateLimiter } from '../utils/rateLimiter';
 import { parseAudioTranscription } from '../transcripts/metadata';
 import { joinCueText, mergeTranscriptCues } from '../transcripts/output';
 import { stitchTranscriptions } from '../utils/stitching';
 
-// ---- Reducer types ----
-type QueueAction =
-  | { type: 'ADD_FILES'; jobs: FileJob[] }
-  | { type: 'REMOVE_JOB'; id: string }
-  | { type: 'UPDATE_JOB'; id: string; updates: Partial<FileJob> }
-  | { type: 'QUEUE_READY' }
-  | { type: 'CLEAR_COMPLETED' }
-  | { type: 'SET_GLOBAL'; status: 'idle' | 'processing' | 'paused' };
+type QueueStatus = 'idle' | 'processing' | 'paused';
+type Log = (message: string, type: 'info' | 'error') => void;
 
-interface QueueState {
-  jobs: FileJob[];
-  globalStatus: 'idle' | 'processing' | 'paused';
+interface Checkpoint {
+  settings: string;
+  segments: AudioChunk[];
+  results: TranscriptionResult[];
 }
 
-const initialState: QueueState = {
-  jobs: [],
-  globalStatus: 'idle',
-};
-
-function queueReducer(state: QueueState, action: QueueAction): QueueState {
-  switch (action.type) {
-    case 'ADD_FILES':
-      return { ...state, jobs: [...state.jobs, ...action.jobs] };
-    case 'REMOVE_JOB':
-      return { ...state, jobs: state.jobs.filter(j => j.id !== action.id) };
-    case 'UPDATE_JOB':
-      return {
-        ...state,
-        jobs: state.jobs.map(j =>
-          j.id === action.id ? { ...j, ...action.updates } : j
-        ),
-      };
-    case 'QUEUE_READY':
-      return {
-        ...state,
-        jobs: state.jobs.map(j =>
-          j.status === 'ready' ? { ...j, status: 'queued' } : j
-        ),
-      };
-    case 'CLEAR_COMPLETED':
-      return { ...state, jobs: state.jobs.filter(j => j.status !== 'done') };
-    case 'SET_GLOBAL':
-      return { ...state, globalStatus: action.status };
-    default:
-      return state;
-  }
-}
-
-// ---- Side-channel for binary data (never in React state) ----
-interface BinaryData {
+interface QueueFile {
   file: File;
-  segments?: AudioChunk[];
-  segmentInfos?: SegmentInfo[];
+  checkpoint?: Checkpoint;
 }
 
-// ---- Supported media types ----
-const SUPPORTED_PREFIXES = ['audio/', 'video/'];
-const SUPPORTED_EXTENSIONS = [
-  '.mp4', '.mkv', '.mov', '.avi', '.wmv', '.webm', '.flv',
-  '.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.wma', '.opus',
-];
-const MIN_MEDIA_FILE_BYTES = 1024;
-
-function isSupported(file: File): boolean {
-  if (SUPPORTED_PREFIXES.some(p => file.type.startsWith(p))) return true;
-  const ext = '.' + file.name.split('.').pop()?.toLowerCase();
-  return SUPPORTED_EXTENSIONS.includes(ext);
-}
-
-function makeId(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-// Sanitize filename for FFmpeg FS — replace problematic chars
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
-function getRawErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function createConversionError(fileName: string, err: unknown, ffmpegOutput: string): Error {
-  const rawMessage = getRawErrorMessage(err);
-  const output = ffmpegOutput.toLowerCase();
-  const looksInvalid =
-    output.includes('invalid frame size') ||
-    output.includes('invalid argument') ||
-    output.includes('format mp3 detected only with low score') ||
-    output.includes('could not find codec parameters');
-
-  if (looksInvalid) {
-    return new Error(`"${fileName}" does not appear to contain valid audio or video data.`);
-  }
-
-  return new Error(rawMessage || `Could not convert "${fileName}".`);
-}
-
-function createUserFacingError(fileName: string, err: unknown): string {
-  const rawMessage = getRawErrorMessage(err);
-  const normalized = rawMessage.toLowerCase();
-
-  if (
-    normalized.includes('errnoerror') ||
-    normalized.includes('fs error') ||
-    normalized.includes('invalid frame size') ||
-    normalized.includes('invalid argument') ||
-    normalized.includes('valid audio or video')
-  ) {
-    return `This file could not be read. It may be empty, corrupted, or not a real audio/video file: "${fileName}".`;
-  }
-
-  if (normalized.includes('no groq api key')) {
-    return 'Add your Groq API key before transcribing.';
-  }
-
-  if (normalized.includes('no openai api key')) {
-    return 'Add your OpenAI API key before transcribing.';
-  }
-
-  if (normalized.includes('no google api key')) {
-    return 'Add your Google API key before transcribing.';
-  }
-
-  if (normalized.includes('api_key_invalid') || normalized.includes('api key not valid')) {
-    return 'The selected provider rejected the API key. Check it in Advanced settings and try again.';
-  }
-
-  if (normalized.includes('401') || normalized.includes('unauthorized') || normalized.includes('invalid api key')) {
-    return 'The selected provider rejected the API key. Check it in Advanced settings and try again.';
-  }
-
-  if (normalized.includes('429') || normalized.includes('rate limit')) {
-    return 'The selected provider is rate limiting requests. Wait a moment, then retry this file.';
-  }
-
-  if (normalized.includes('network') || normalized.includes('failed to fetch')) {
-    return 'The transcription request could not reach the selected provider. Check your connection and try again.';
-  }
-
-  return rawMessage || `Could not transcribe "${fileName}".`;
-}
-
-// ---- Hook config ----
 interface QueueConfig {
   ffmpegPool: FFmpegPoolHandle;
   apiConfigRef: React.RefObject<ApiConfig>;
-  onLog: (msg: string, type: 'info' | 'error') => void;
+  onLog: Log;
 }
 
-export function useTranscriptionQueue(config: QueueConfig) {
-  const { ffmpegPool, apiConfigRef, onLog } = config;
-  const [state, dispatch] = useReducer(queueReducer, initialState);
+function describeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/api_key_invalid|api key not valid|invalid api key|\b401\b|unauthorized/i.test(message)) {
+    return 'The provider rejected the API key. Check Advanced settings and retry.';
+  }
+  if (/\b429\b|rate limit/i.test(message)) return 'The provider is rate limiting requests. Wait a moment and retry.';
+  if (/network|failed to fetch/i.test(message)) return 'Could not reach the provider. Check your connection and retry.';
+  return message;
+}
 
-  // Binary data side-channel
-  const binaryRef = useRef<Map<string, BinaryData>>(new Map());
-  // Rate limiter (persists across renders)
-  const rateLimiterRef = useRef(new RateLimiter(10));
-  // Paused flag (ref for async access)
-  const pausedRef = useRef(false);
-  // Keep a ref to current jobs for async access
-  const jobsRef = useRef(state.jobs);
-  jobsRef.current = state.jobs;
-  // Track which job IDs are currently being claimed for processing
-  const claimedJobsRef = useRef<Set<string>>(new Set());
-
-  // ---- Helpers ----
-  const updateJob = useCallback((id: string, updates: Partial<FileJob>) => {
-    dispatch({ type: 'UPDATE_JOB', id, updates });
-  }, []);
-
-  const getApiConfig = useCallback((): ApiConfig => {
-    return apiConfigRef.current!;
-  }, [apiConfigRef]);
-
-  // ---- File addition with validation ----
-  const addFiles = useCallback((files: File[]) => {
-    const newJobs: FileJob[] = [];
-    const existing = jobsRef.current;
-
-    for (const file of files) {
-      // Validate format
-      if (!isSupported(file)) {
-        onLog(`Rejected "${file.name}" - unsupported format (${file.type || 'unknown'}).`, 'error');
-        continue;
-      }
-      if (file.size < MIN_MEDIA_FILE_BYTES) {
-        onLog(`Rejected "${file.name}" - file is too small to contain usable audio or video data.`, 'error');
-        continue;
-      }
-      // Duplicate detection
-      const fingerprint = `${file.name}_${file.size}_${file.lastModified}`;
-      const isDupe = existing.some(j => {
-        const bd = binaryRef.current.get(j.id);
-        if (!bd) return false;
-        return `${bd.file.name}_${bd.file.size}_${bd.file.lastModified}` === fingerprint;
+async function transcribeSegment(
+  data: Uint8Array, name: string, config: ApiConfig, limiter: RateLimiter, onLog: Log,
+): Promise<TranscriptionResult> {
+  const audio = new File([data], name, { type: 'audio/mp3' });
+  await limiter.acquire();
+  try {
+    let result: TranscriptionResult;
+    if (config.selectedApi === 'groq') {
+      const client = new Groq({ apiKey: config.groqKey, dangerouslyAllowBrowser: true });
+      const response = await client.audio.transcriptions.create({
+        file: audio, model: config.groqModel, response_format: 'verbose_json', timestamp_granularities: ['word', 'segment'],
       });
-      if (isDupe) {
-        onLog(`"${file.name}" already in queue - adding anyway.`, 'info');
-      }
-
-      const id = makeId();
-      const job: FileJob = {
-        id,
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type,
-        status: 'ready',
-        progress: 0,
-        addedAt: Date.now(),
-      };
-      newJobs.push(job);
-      binaryRef.current.set(id, { file });
-      onLog(`Added "${file.name}".`, 'info');
+      result = parseAudioTranscription(response);
+    } else if (config.selectedApi === 'google') {
+      result = await transcribeGoogleAudio(config.googleKey, config.googleModel, audio, message => onLog(message, 'error'));
+    } else {
+      const client = new OpenAI({ apiKey: config.openaiKey, dangerouslyAllowBrowser: true });
+      const response = await client.audio.transcriptions.create({
+        file: audio,
+        model: config.openaiModel,
+        ...(config.openaiModel === 'gpt-4o-transcribe-diarize'
+          ? { response_format: 'diarized_json' as const, chunking_strategy: 'auto' as const }
+          : config.openaiModel === 'whisper-1'
+            ? { response_format: 'verbose_json' as const, timestamp_granularities: ['word', 'segment'] }
+            : {}),
+      });
+      result = parseAudioTranscription(response);
     }
+    limiter.onSuccess();
+    return result;
+  } catch (error) {
+    const status = (error as { status?: number } | null)?.status;
+    if (status === 429 || /\b429\b/.test(String(error))) limiter.on429();
+    throw error;
+  } finally {
+    limiter.release();
+  }
+}
 
-    if (newJobs.length > 0) {
-      dispatch({ type: 'ADD_FILES', jobs: newJobs });
-    }
-  }, [onLog]);
+export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, onLog }: QueueConfig) {
+  const [jobs, setJobs] = useState<FileJob[]>([]);
+  const jobsRef = useRef<FileJob[]>([]);
+  const [globalStatus, setStatus] = useState<QueueStatus>('idle');
+  const statusRef = useRef<QueueStatus>('idle');
+  const files = useRef(new Map<string, QueueFile>());
+  const active = useRef(new Set<string>());
+  const limiter = useRef(new RateLimiter(10));
 
-  // ---- Remove job ----
-  const removeJob = useCallback((id: string) => {
-    binaryRef.current.delete(id);
-    dispatch({ type: 'REMOVE_JOB', id });
+  const changeJobs = useCallback((update: (previous: FileJob[]) => FileJob[]) => {
+    jobsRef.current = update(jobsRef.current);
+    setJobs(jobsRef.current);
   }, []);
 
-  // ---- Clean an FFmpeg instance's FS before use ----
-  const cleanFFmpegFS = async (ffmpeg: FFmpeg, mountDir: string) => {
-    // Try to unmount if something was left mounted
-    try { await ffmpeg.unmount(mountDir); } catch { /* not mounted, fine */ }
-    // Try to remove the directory
-    try { await ffmpeg.deleteDir(mountDir); } catch { /* doesn't exist, fine */ }
-  };
+  const updateJob = useCallback((id: string, updates: Partial<FileJob>) => {
+    changeJobs(all => all.map(job => job.id === id ? { ...job, ...updates } : job));
+  }, [changeJobs]);
 
-  // ---- Convert a single file using an FFmpeg instance ----
-  const convertFile = useCallback(async (
-    ffmpeg: FFmpeg,
-    jobId: string,
-    file: File,
-    cfg: ApiConfig
-  ): Promise<{ mp3Data: Uint8Array }> => {
-    // Use a unique mount dir per job to avoid collisions
-    const mountDir = `/mnt_${jobId}`;
-    const outputFileName = `out_${jobId}.mp3`;
+  const changeStatus = useCallback((status: QueueStatus) => {
+    statusRef.current = status;
+    setStatus(status);
+  }, []);
 
-    // Clean any leftover state
-    await cleanFFmpegFS(ffmpeg, mountDir);
-    let ffmpegOutput = '';
-    const logHandler = ({ message }: { message: string }) => {
-      ffmpegOutput += `${message}\n`;
+  const addFiles = useCallback((incoming: File[]): string[] => {
+    const added: FileJob[] = [];
+    for (const file of incoming) {
+      if (!file.size || !isSupportedMedia(file)) {
+        onLog('Rejected "' + file.name + '". Choose a nonempty audio or video file.', 'error');
+        continue;
+      }
+      if (file.size >= MAX_INPUT_BYTES) {
+        onLog('"' + file.name + '" exceeds the browser audio tools’ 2 GiB input limit. Split it before adding it.', 'error');
+        continue;
+      }
+      const id = 'media-' + Math.random().toString(36).slice(2);
+      added.push({
+        id, fileName: file.name, fileSize: file.size, mimeType: file.type,
+        status: 'ready', progress: 0, addedAt: Date.now(),
+      });
+      files.current.set(id, { file });
+      onLog('Added "' + file.name + '".', 'info');
+    }
+    if (added.length) changeJobs(previous => [...previous, ...added]);
+    return added.map(job => job.id);
+  }, [changeJobs, onLog]);
+
+  const processJob = useCallback(async (id: string) => {
+    const item = files.current.get(id);
+    const config = apiConfigRef.current;
+    if (!item || !config) return;
+    const { file } = item;
+    const provider = {
+      google: { name: 'Google', key: config.googleKey, model: config.googleModel },
+      groq: { name: 'Groq', key: config.groqKey, model: config.groqModel },
+      openai: { name: 'OpenAI', key: config.openaiKey, model: config.openaiModel },
+    }[config.selectedApi];
+    const settings = JSON.stringify([config.selectedApi, provider.model, config.sampleRate, config.maxFileSizeMB]);
+    const pauseAtCheckpoint = () => {
+      if (statusRef.current !== 'paused') return false;
+      updateJob(id, { status: 'queued' });
+      return true;
     };
 
     try {
-      await ffmpeg.createDir(mountDir);
-      await ffmpeg.mount('WORKERFS' as FFFSType, { files: [file] }, mountDir);
-
-      // WORKERFS exposes the file by its original name
-      const inputPath = `${mountDir}/${file.name}`;
-
-      const ffmpegCmd = file.type.startsWith('video/')
-        ? ['-i', inputPath, '-map', '0:a:0', '-ar', cfg.sampleRate.toString(), '-ac', '1', '-c:a', 'libmp3lame', '-f', 'mp3', outputFileName]
-        : ['-i', inputPath, '-vn', '-map', '0:a:0', '-ar', cfg.sampleRate.toString(), '-ac', '1', '-c:a', 'libmp3lame', '-f', 'mp3', outputFileName];
-
-      ffmpeg.on('log', logHandler);
-      await ffmpeg.exec(ffmpegCmd);
-      ffmpeg.off('log', logHandler);
-
-      const mp3Data = await ffmpeg.readFile(outputFileName) as unknown as Uint8Array;
-
-      // Cleanup
-      try { await ffmpeg.unmount(mountDir); } catch { /* ok */ }
-      try { await ffmpeg.deleteDir(mountDir); } catch { /* ok */ }
-      try { ffmpeg.deleteFile(outputFileName); } catch { /* ok */ }
-
-      return { mp3Data };
-    } catch (err) {
-      try { ffmpeg.off('log', logHandler); } catch { /* ok */ }
-      // Cleanup on error too
-      try { await ffmpeg.unmount(mountDir); } catch { /* ok */ }
-      try { await ffmpeg.deleteDir(mountDir); } catch { /* ok */ }
-      try { ffmpeg.deleteFile(outputFileName); } catch { /* ok */ }
-      throw createConversionError(file.name, err, ffmpegOutput);
-    }
-  }, []);
-
-  // ---- Split audio to fit provider byte and duration limits ----
-  const splitFile = useCallback(async (
-    ffmpeg: FFmpeg,
-    jobId: string,
-    mp3Data: Uint8Array,
-    cfg: ApiConfig
-  ): Promise<AudioChunk[]> => {
-    const maxBytes = cfg.selectedApi === 'google'
-      ? Math.min(cfg.maxFileSizeMB * 1024 * 1024, 2 * 1024 ** 3)
-      : cfg.maxFileSizeMB * 1024 * 1024;
-    // Speaker/word annotations limit Google requests to 30 minutes.
-    const maxDuration = cfg.selectedApi === 'google' ? 1790 : Infinity;
-    const overlap = cfg.selectedApi === 'openai' && cfg.openaiModel === 'gpt-4o-transcribe-diarize' ? 0 : 3;
-    if (mp3Data.byteLength <= maxBytes && maxDuration === Infinity) return [{ data: mp3Data, offset: 0, keepStart: 0, keepEnd: Infinity }];
-
-    const rootName = `split_${jobId}.mp3`;
-    const temporaryFiles = new Set([rootName]);
-    try {
-      await ffmpeg.writeFile(rootName, mp3Data);
-      const recursiveSplit = async (
-        filename: string, offset: number, keepStart: number, keepEnd: number,
-      ): Promise<AudioChunk[]> => {
-        const fileData = await ffmpeg.readFile(filename) as Uint8Array;
-        if (fileData.byteLength <= maxBytes && maxDuration === Infinity) return [{ data: fileData, offset, keepStart, keepEnd }];
-
-        let output = '';
-        const logHandler = ({ message }: { message: string }) => { output += message + '\n'; };
-        ffmpeg.on('log', logHandler);
+      if (!provider.key.trim()) throw new Error('Add your ' + provider.name + ' API key before transcribing.');
+      if (item.checkpoint?.settings !== settings) {
+        item.checkpoint = undefined;
+        updateJob(id, { status: 'converting', progress: 10, segmentCount: undefined, segmentsTranscribed: 0 });
+        const { instance, release } = await acquire();
         try {
-          await ffmpeg.exec(['-i', filename, '-t', '0', '-f', 'null', '-']);
+          if (pauseAtCheckpoint()) return;
+          const data = await convertAudio(instance, file, id, config.sampleRate,
+            track => onLog('"' + file.name + '": using audio track ' + track + ' because earlier tracks were silent.', 'info'));
+          updateJob(id, { status: 'splitting', progress: 35 });
+          const segments = await splitAudio(instance, data, id, config);
+          item.checkpoint = { settings, segments, results: [] };
         } finally {
-          ffmpeg.off('log', logHandler);
+          release();
         }
-        const durationMatch = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-        if (!durationMatch) throw new Error('Could not determine audio duration for safe splitting.');
-        const duration = Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3]);
-        if (fileData.byteLength <= maxBytes && duration <= maxDuration) return [{ data: fileData, offset, keepStart, keepEnd }];
-        // Overlapping halves must shrink, including for unusually small chunk settings.
-        if (duration <= overlap * 2 || duration <= 0) throw new Error('Audio cannot fit the selected chunk size. Increase it in Advanced settings.');
-
-        const halfTime = duration / 2;
-        const leftName = `${filename}_L.mp3`;
-        const rightName = `${filename}_R.mp3`;
-        temporaryFiles.add(leftName);
-        temporaryFiles.add(rightName);
-        await ffmpeg.exec(['-i', filename, '-ss', '0', '-to', (halfTime + overlap).toString(), '-c', 'copy', leftName]);
-        await ffmpeg.exec(['-i', filename, '-ss', (halfTime - overlap).toString(), '-to', duration.toString(), '-c', 'copy', rightName]);
-        const boundary = offset + halfTime;
-        return [
-          ...await recursiveSplit(leftName, offset, keepStart, Math.min(keepEnd, boundary)),
-          ...await recursiveSplit(rightName, offset + halfTime - overlap, Math.max(keepStart, boundary), keepEnd),
-        ];
-      };
-
-      const segments: AudioChunk[] = await recursiveSplit(rootName, 0, 0, Infinity);
-      if (segments.length > 1) onLog(`[${jobId.slice(0, 6)}] Split into ${segments.length} segments.`, 'info');
-      return segments;
-    } finally {
-      for (const name of temporaryFiles) {
-        try { await ffmpeg.deleteFile(name); } catch { /* already removed */ }
-      }
-    }
-  }, [onLog]);
-
-  // ---- Transcribe a single segment ----
-  const transcribeSegment = useCallback(async (
-    segmentData: Uint8Array,
-    segmentName: string,
-    jobId: string,
-    cfg: ApiConfig
-  ): Promise<TranscriptionResult> => {
-    const limiter = rateLimiterRef.current;
-
-    await limiter.acquire();
-    try {
-      const bytes = segmentData.byteOffset === 0 && segmentData.byteLength === segmentData.buffer.byteLength
-        ? segmentData.buffer
-        : segmentData.buffer.slice(segmentData.byteOffset, segmentData.byteOffset + segmentData.byteLength);
-      const blob = new Blob([bytes], { type: 'audio/mp3' });
-      const audioFile = new File([blob], segmentName, { type: 'audio/mp3' });
-
-      let result: TranscriptionResult;
-
-      if (cfg.selectedApi === 'groq') {
-        if (!cfg.groqKey) throw new Error('No Groq API key set.');
-        const client = new Groq({ apiKey: cfg.groqKey, dangerouslyAllowBrowser: true });
-        const resp = await client.audio.transcriptions.create({
-          file: audioFile,
-          model: cfg.groqModel,
-          response_format: 'verbose_json',
-          timestamp_granularities: ['word', 'segment'],
-        });
-        result = parseAudioTranscription(resp);
-      } else if (cfg.selectedApi === 'google') {
-        result = await transcribeGoogleAudio(cfg.googleKey, cfg.googleModel, audioFile, message => onLog(message, 'error'));
-      } else {
-        if (!cfg.openaiKey) throw new Error('No OpenAI API key set.');
-        const client = new OpenAI({ apiKey: cfg.openaiKey, dangerouslyAllowBrowser: true });
-        const resp = await client.audio.transcriptions.create({
-          file: audioFile,
-          model: cfg.openaiModel,
-          ...(cfg.openaiModel === 'gpt-4o-transcribe-diarize'
-            ? { response_format: 'diarized_json' as const, chunking_strategy: 'auto' as const }
-            : cfg.openaiModel === 'whisper-1'
-              ? { response_format: 'verbose_json' as const, timestamp_granularities: ['word', 'segment'] }
-              : {}),
-        });
-        result = parseAudioTranscription(resp);
       }
 
-      limiter.release();
-      limiter.onSuccess();
-      return result;
-    } catch (err: unknown) {
-      limiter.release();
-      const providerError = err as { status?: number; message?: string };
-      if (providerError.status === 429 || providerError.message?.includes('429')) {
-        limiter.on429();
-        onLog(`[${jobId.slice(0, 6)}] Rate limited (429). Backing off...`, 'error');
-      }
-      throw err;
-    }
-  }, [onLog]);
-
-  // ---- Process a single job end-to-end ----
-  const processJob = useCallback(async (jobId: string) => {
-    const bd = binaryRef.current.get(jobId);
-    if (!bd) return;
-    const cfg = { ...getApiConfig() };
-
-    try {
-      // Step 1: Convert
-      updateJob(jobId, { status: 'converting', progress: 10 });
-      onLog(`[${bd.file.name}] Converting to MP3...`, 'info');
-
-      const { instance, release } = await ffmpegPool.acquire();
-      let segments: AudioChunk[] | null = null;
-      try {
-        const result = await convertFile(instance, jobId, bd.file, cfg);
-        const mp3Data = result.mp3Data;
-        updateJob(jobId, { progress: 30 });
-        onLog(`[${bd.file.name}] Conversion complete (${(mp3Data.byteLength / 1024 / 1024).toFixed(1)}MB).`, 'info');
-
-        // Step 2: Split
-        updateJob(jobId, { status: 'splitting', progress: 35 });
-        segments = await splitFile(instance, jobId, mp3Data, cfg);
-
-        release(); // Free the FFmpeg instance for other jobs
-      } catch (err) {
-        release();
-        throw err;
-      }
-
-      // Store segments
-      bd.segments = segments;
-      updateJob(jobId, { segmentCount: segments.length, progress: 40 });
-
-      // Check if paused
-      if (pausedRef.current) {
-        updateJob(jobId, { status: 'queued', progress: 0 });
-        return;
-      }
-
-      // Step 3: Transcribe
-      updateJob(jobId, { status: 'transcribing', progress: 45 });
-      onLog(`[${bd.file.name}] Transcribing ${segments.length} segment(s)...`, 'info');
-
-      const results: TranscriptionResult[] = [];
-      for (let i = 0; i < segments.length; i++) {
-        if (pausedRef.current) {
-          updateJob(jobId, { status: 'queued', progress: 0 });
-          return;
+      const { segments, results } = item.checkpoint;
+      const progress = () => Math.round(45 + 45 * results.length / segments.length);
+      updateJob(id, { status: 'transcribing', segmentCount: segments.length, segmentsTranscribed: results.length, progress: progress() });
+      const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      for (let index = results.length; index < segments.length; index++) {
+        if (pauseAtCheckpoint()) return;
+        const result = await transcribeSegment(segments[index].data, filename + '_seg' + index + '.mp3', config, limiter.current, onLog);
+        if (!result.text.trim()) {
+          throw new Error('The provider returned no speech for part ' + (index + 1) + '. Check that the audio contains speech, then retry.');
         }
-
-        const segName = `${sanitizeFilename(bd.file.name)}_seg${i}.mp3`;
-        const result = await transcribeSegment(segments[i].data, segName, jobId, cfg);
         results.push(result);
-
-        const transcribeProgress = 45 + ((i + 1) / segments.length) * 45;
-        updateJob(jobId, {
-          segmentsTranscribed: i + 1,
-          progress: Math.round(transcribeProgress),
-        });
+        updateJob(id, { segmentsTranscribed: results.length, progress: progress() });
       }
-
-      // Step 4: Stitch
-      updateJob(jobId, { status: 'stitching', progress: 92 });
+      updateJob(id, { status: 'stitching', progress: 92 });
       const transcriptCues = mergeTranscriptCues(results, segments);
-      const transcript = transcriptCues
-        ? results.length === 1 ? results[0].text : joinCueText(transcriptCues)
-        : stitchTranscriptions(results.map(result => result.text), (msg, type) => onLog(msg, type || 'info'));
-
-      // Done!
-      updateJob(jobId, { status: 'done', progress: 100, transcript, transcriptCues });
-      onLog(`[${bd.file.name}] ✓ Transcription complete.`, 'info');
-
-      // Free binary data — no longer needed
-      delete bd.segments;
-
-    } catch (err: unknown) {
-      const msg = createUserFacingError(bd?.file?.name || 'this file', err);
-      updateJob(jobId, { status: 'error', error: msg });
-      onLog(`[${bd?.file?.name}] Error: ${msg}`, 'error');
+      const transcript = results.length === 1 ? results[0].text
+        : transcriptCues ? joinCueText(transcriptCues)
+          : segments[1].offset < segments[1].keepStart
+            ? stitchTranscriptions(results.map(result => result.text), (message, type) => onLog(message, type || 'info'))
+            : results.map(result => result.text.trim()).join('\n');
+      updateJob(id, { status: 'done', progress: 100, transcript, transcriptCues });
+      files.current.delete(id);
+      onLog('"' + file.name + '" transcription complete.', 'info');
+    } catch (error) {
+      const message = describeError(error);
+      updateJob(id, { status: 'error', error: message });
+      onLog('"' + file.name + '": ' + message, 'error');
     }
-  }, [ffmpegPool, convertFile, splitFile, transcribeSegment, updateJob, onLog, getApiConfig]);
+  }, [acquire, apiConfigRef, onLog, updateJob]);
 
-  // ---- Claim next available queued job (thread-safe via Set) ----
-  const claimNextJob = useCallback((): string | null => {
-    const nextJob = jobsRef.current.find(
-      j => j.status === 'queued' && !claimedJobsRef.current.has(j.id)
-    );
-    if (!nextJob) return null;
-    claimedJobsRef.current.add(nextJob.id);
-    return nextJob.id;
-  }, []);
-
-  // ---- Start all: process jobs with parallelism ----
-  const startAll = useCallback(async () => {
-    pausedRef.current = false;
-    claimedJobsRef.current.clear();
-    jobsRef.current = jobsRef.current.map(j =>
-      j.status === 'ready' ? { ...j, status: 'queued' } : j
-    );
-    dispatch({ type: 'QUEUE_READY' });
-    dispatch({ type: 'SET_GLOBAL', status: 'processing' });
-
-    // Launch multiple processing loops (one per FFmpeg pool slot)
-    const poolSize = 2;
-    const loops = Array.from({ length: poolSize }, () =>
-      (async () => {
-        while (!pausedRef.current) {
-          const jobId = claimNextJob();
-          if (!jobId) break;
-          updateJob(jobId, { status: 'converting', progress: 5 });
-          await processJob(jobId);
-          claimedJobsRef.current.delete(jobId);
-        }
-      })()
-    );
-
-    await Promise.all(loops);
-    claimedJobsRef.current.clear();
-    if (!pausedRef.current) {
-      dispatch({ type: 'SET_GLOBAL', status: 'idle' });
-      onLog('All jobs complete.', 'info');
+  const pump = useCallback(function pumpQueue() {
+    if (statusRef.current === 'paused') {
+      if (!active.current.size && !jobsRef.current.some(job => job.status === 'queued')) changeStatus('idle');
+      return;
     }
-  }, [processJob, updateJob, onLog, claimNextJob]);
 
-  // ---- Pause ----
-  const pause = useCallback(() => {
-    pausedRef.current = true;
-    dispatch({ type: 'SET_GLOBAL', status: 'paused' });
-    onLog('Processing paused.', 'info');
-  }, [onLog]);
+    const slots = AUDIO_WORKERS - active.current.size;
+    const queued = jobsRef.current.filter(job => job.status === 'queued' && !active.current.has(job.id));
+    const scheduled = queued.slice(0, slots);
+    if ((scheduled.length || active.current.size) && statusRef.current !== 'processing') changeStatus('processing');
+    for (const job of scheduled) {
+      active.current.add(job.id);
+      void processJob(job.id).finally(() => {
+        active.current.delete(job.id);
+        pumpQueue();
+      });
+    }
+    if (!active.current.size && statusRef.current !== 'idle') changeStatus('idle');
+  }, [changeStatus, processJob]);
 
-  // ---- Resume ----
+  const startAll = useCallback(() => {
+    changeJobs(all => all.map(job => job.status === 'ready' ? { ...job, status: 'queued' } : job));
+    pump();
+  }, [changeJobs, pump]);
+
+  const startJob = useCallback((id: string) => {
+    if (active.current.has(id)) return;
+    const job = jobsRef.current.find(candidate => candidate.id === id);
+    if (job && (job.status === 'ready' || job.status === 'queued' || job.status === 'error')) {
+      updateJob(id, { status: 'queued', error: undefined });
+      pump();
+    }
+  }, [pump, updateJob]);
+
+  const pause = useCallback(() => changeStatus('paused'), [changeStatus]);
+
   const resume = useCallback(() => {
-    pausedRef.current = false;
-    startAll();
-  }, [startAll]);
+    changeStatus('idle');
+    pump();
+  }, [changeStatus, pump]);
 
-  // ---- Retry a failed job ----
-  const retryJob = useCallback(async (id: string) => {
-    updateJob(id, { status: 'queued', progress: 0, error: undefined });
-    if (state.globalStatus !== 'processing') {
-      pausedRef.current = false;
-      dispatch({ type: 'SET_GLOBAL', status: 'processing' });
-      await processJob(id);
-      dispatch({ type: 'SET_GLOBAL', status: 'idle' });
-    }
-  }, [state.globalStatus, processJob, updateJob]);
+  const removeJob = useCallback((id: string) => {
+    if (active.current.has(id)) return;
+    files.current.delete(id);
+    changeJobs(previous => previous.filter(job => job.id !== id));
+    pump();
+  }, [changeJobs, pump]);
 
-  // ---- Process one queued job ----
-  const startJob = useCallback(async (id: string) => {
-    if (state.globalStatus === 'processing') return;
-
-    pausedRef.current = false;
-    dispatch({ type: 'SET_GLOBAL', status: 'processing' });
-    await processJob(id);
-    dispatch({ type: 'SET_GLOBAL', status: 'idle' });
-  }, [state.globalStatus, processJob]);
-
-  // ---- Update transcript (user editing) ----
-  const updateTranscript = useCallback((id: string, text: string) => {
-    updateJob(id, { transcript: text });
-  }, [updateJob]);
-
-  // ---- Clear completed ----
   const clearCompleted = useCallback(() => {
-    const completed = state.jobs.filter(j => j.status === 'done');
-    completed.forEach(j => binaryRef.current.delete(j.id));
-    dispatch({ type: 'CLEAR_COMPLETED' });
-  }, [state.jobs]);
+    changeJobs(previous => previous.filter(job => job.status !== 'done'));
+  }, [changeJobs]);
 
-  // ---- Update LLM result for a job ----
   const setLLMResult = useCallback((id: string, result: string) => {
     updateJob(id, { llmResult: result });
   }, [updateJob]);
 
   return {
-    jobs: state.jobs,
-    globalStatus: state.globalStatus,
-    completedCount: state.jobs.filter(j => j.status === 'done').length,
-    totalCount: state.jobs.length,
-    addFiles,
-    removeJob,
-    startAll,
-    pause,
-    resume,
-    startJob,
-    retryJob,
-    updateTranscript,
-    clearCompleted,
-    setLLMResult,
+    jobs, globalStatus, completedCount: jobs.filter(job => job.status === 'done').length, totalCount: jobs.length,
+    addFiles, removeJob, startAll, pause, resume, startJob, retryJob: startJob, clearCompleted, setLLMResult,
   };
 }

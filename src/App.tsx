@@ -22,6 +22,8 @@ import BatchLLMPanel from "./components/BatchLLMPanel";
 import TranscriptOutputOptions from "./components/TranscriptOutputOptions";
 import { formatTranscript } from "./transcripts/output";
 import RecentTranscriptRow from "./components/RecentTranscriptRow";
+import { MEDIA_ACCEPT } from "./media/prepareAudio";
+import { readSetting, removeSetting, writeSetting } from "./utils/browserStorage";
 import {
   getStoredModel,
   GOOGLE_AUDIO_MODELS,
@@ -63,7 +65,7 @@ type RecentTranscription = {
 
 function loadRecentTranscriptions(): RecentTranscription[] {
   try {
-    const stored = localStorage.getItem(RECENT_TRANSCRIPTS_KEY);
+    const stored = readSetting(RECENT_TRANSCRIPTS_KEY);
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     return Array.isArray(parsed) ? parsed.slice(0, RECENT_TRANSCRIPTS_LIMIT) : [];
@@ -75,19 +77,15 @@ function loadRecentTranscriptions(): RecentTranscription[] {
 function saveRecentTranscriptions(items: RecentTranscription[]) {
   const cached = items.slice(0, RECENT_TRANSCRIPTS_LIMIT);
   if (!cached.length) {
-    localStorage.removeItem(RECENT_TRANSCRIPTS_KEY);
+    removeSetting(RECENT_TRANSCRIPTS_KEY);
     return;
   }
   // Annotation data can exceed browser storage limits; keep the newest result first.
   while (cached.length) {
-    try {
-      localStorage.setItem(RECENT_TRANSCRIPTS_KEY, JSON.stringify(cached));
-      return;
-    } catch {
-      if (cached.length > 1) cached.pop();
-      else if (cached[0].transcriptCues) cached[0] = { ...cached[0], transcriptCues: undefined };
-      else break;
-    }
+    if (writeSetting(RECENT_TRANSCRIPTS_KEY, JSON.stringify(cached))) return;
+    if (cached.length > 1) cached.pop();
+    else if (cached[0].transcriptCues) cached[0] = { ...cached[0], transcriptCues: undefined };
+    else break;
   }
 }
 
@@ -96,21 +94,27 @@ const App: React.FC = () => {
   // GLOBAL SETTINGS STATE (persisted in localStorage)
   // -----------------------------------------------------------------
   const [selectedApi, setSelectedApi] = useState<ApiProvider>(() => {
-    const stored = localStorage.getItem("selectedApi") as ApiProvider | null;
+    const stored = readSetting("selectedApi") as ApiProvider | null;
     return stored && API_PROVIDERS.includes(stored) ? stored : "google";
   });
-  const [groqKey, setGroqKey] = useState(localStorage.getItem("groqKey") || "");
-  const [openaiKey, setOpenaiKey] = useState(localStorage.getItem("openaiKey") || "");
-  const [googleKey, setGoogleKey] = useState(localStorage.getItem("googleKey") || "");
+  const [groqKey, setGroqKey] = useState(() => readSetting("groqKey") || "");
+  const [openaiKey, setOpenaiKey] = useState(() => readSetting("openaiKey") || "");
+  const [googleKey, setGoogleKey] = useState(() => readSetting("googleKey") || "");
   const [googleModel, setGoogleModel] = useState(getStoredModel("googleModel", GOOGLE_AUDIO_MODELS));
   const [googleChatModel, setGoogleChatModel] = useState(getStoredModel("googleChatModel", GOOGLE_CHAT_MODELS));
   const [groqModel, setGroqModel] = useState(getStoredModel("groqModel", GROQ_AUDIO_MODELS));
   const [openaiModel, setOpenaiModel] = useState(getStoredModel("openaiModel", OPENAI_AUDIO_MODELS));
   const [maxFileSizeMB, setMaxFileSizeMB] = useState(
-    parseFloat(localStorage.getItem("maxFileSizeMB") || "25")
+    () => {
+      const saved = Number(readSetting("maxFileSizeMB"));
+      return Number.isFinite(saved) && saved > 0 ? saved : 25;
+    }
   );
   const [sampleRate, setSampleRate] = useState(
-    parseInt(localStorage.getItem("sampleRate") || "16000", 10)
+    () => {
+      const saved = Number(readSetting("sampleRate"));
+      return SAMPLE_RATE_OPTIONS.some(option => option.value === saved) ? saved : 16000;
+    }
   );
   const [openAiChatModel, setOpenAiChatModel] = useState(
     getStoredModel("openAiChatModel", OPENAI_CHAT_MODELS)
@@ -120,21 +124,21 @@ const App: React.FC = () => {
   );
 
   const [outputOptions, setOutputOptions] = useState<OutputOptions>(() => ({
-    timestamps: localStorage.getItem("showTranscriptTimestamps") === "true",
-    speakers: localStorage.getItem("showTranscriptSpeakers") === "true",
+    timestamps: readSetting("showTranscriptTimestamps") === "true",
+    speakers: readSetting("showTranscriptSpeakers") === "true",
   }));
   const handleOutputOptionsChange = (options: OutputOptions) => {
     setOutputOptions(options);
-    localStorage.setItem("showTranscriptTimestamps", String(options.timestamps));
-    localStorage.setItem("showTranscriptSpeakers", String(options.speakers));
+    writeSetting("showTranscriptTimestamps", String(options.timestamps));
+    writeSetting("showTranscriptSpeakers", String(options.speakers));
   };
 
   // Automation settings
   const [autoTranscribe, setAutoTranscribe] = useState(
-    localStorage.getItem("autoTranscribe") === "true"
+    () => readSetting("autoTranscribe") === "true"
   );
   const [autoCopyToClipboard, setAutoCopyToClipboard] = useState(
-    localStorage.getItem("autoCopyToClipboard") !== "false"
+    () => readSetting("autoCopyToClipboard") !== "false"
   );
 
   // UI toggles
@@ -168,12 +172,12 @@ const App: React.FC = () => {
   // Clear settings left by the removed provider and persist the validated selection.
   useEffect(() => {
     for (const key of ["alibabaKey", "alibabaModel", "alibabaChatModel", "temporaryUploadWorkerUrl"]) {
-      localStorage.removeItem(key);
+      removeSetting(key);
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("selectedApi", selectedApi);
+    writeSetting("selectedApi", selectedApi);
   }, [selectedApi]);
 
   // -----------------------------------------------------------------
@@ -184,7 +188,7 @@ const App: React.FC = () => {
     if (type === "error") {
       toast.error(msg);
     }
-    setLogMessages(prev => [...prev, { text: `[${timeStamp}] ${msg}`, type, html: true }]);
+    setLogMessages(prev => [...prev.slice(-499), { text: `[${timeStamp}] ${msg}`, type }]);
   }, []);
 
   useEffect(() => {
@@ -196,7 +200,7 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // FFMPEG POOL + TRANSCRIPTION QUEUE
   // -----------------------------------------------------------------
-  const ffmpegPool = useFFmpegPool(2, appendLog);
+  const ffmpegPool = useFFmpegPool(appendLog);
   const queue = useTranscriptionQueue({
     ffmpegPool,
     apiConfigRef: apiConfigRef as React.RefObject<ApiConfig>,
@@ -213,7 +217,7 @@ const App: React.FC = () => {
     logMessage: string
   ) => {
     setter(value);
-    localStorage.setItem(localStorageKey, value.toString());
+    writeSetting(localStorageKey, value.toString());
     appendLog(logMessage, "info");
   };
 
@@ -223,17 +227,17 @@ const App: React.FC = () => {
   const handleGroqKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setGroqKey(value);
-    localStorage.setItem("groqKey", value);
+    writeSetting("groqKey", value);
   };
   const handleOpenaiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setOpenaiKey(value);
-    localStorage.setItem("openaiKey", value);
+    writeSetting("openaiKey", value);
   };
   const handleGoogleKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setGoogleKey(value);
-    localStorage.setItem("googleKey", value);
+    writeSetting("googleKey", value);
   };
   const handleGoogleKeyBlur = () => {
     if (googleKey === lastConfirmedGoogleKeyRef.current) return;
@@ -280,11 +284,8 @@ const App: React.FC = () => {
   // VOICE RECORDER
   // -----------------------------------------------------------------
   const handleRecordingComplete = (file: File, shouldTranscribeNow = false) => {
-    queue.addFiles([file]);
-    if (shouldTranscribeNow || autoTranscribe) {
-      // Start immediately after adding
-      setTimeout(() => queue.startAll(), 100);
-    }
+    const [id] = queue.addFiles([file]);
+    if (id && (shouldTranscribeNow || autoTranscribe)) queue.startJob(id);
   };
 
   // -----------------------------------------------------------------
@@ -293,7 +294,7 @@ const App: React.FC = () => {
   const uploadProps: UploadProps = {
     name: "file",
     multiple: true,
-    accept: "audio/*,video/*",
+    accept: MEDIA_ACCEPT,
     beforeUpload: (_file: File, fileList: File[]) => {
       // On the first file of a batch, add all files at once.
       if (fileList[0] === _file) {
@@ -365,14 +366,15 @@ const App: React.FC = () => {
   // -----------------------------------------------------------------
   // COPY / DOWNLOAD UTILITIES
   // -----------------------------------------------------------------
-  const handleCopy = useCallback((text: string) => {
+  const handleCopy = useCallback(async (text: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text.trim()).then(
-      () => {
-        toast.success("Copied to clipboard.", { autoClose: 3000 });
-      },
-      (err) => appendLog(`Error copying: ${err}`, "error")
-    );
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable.");
+      await navigator.clipboard.writeText(text.trim());
+      toast.success("Copied to clipboard.", { autoClose: 3000 });
+    } catch {
+      appendLog("Could not access the clipboard. You can select the transcript or use Download.", "error");
+    }
   }, [appendLog]);
 
   const handleDownload = useCallback((text: string, fileName: string) => {
@@ -456,11 +458,10 @@ const App: React.FC = () => {
       if (completedJobs.length > 0) {
         const lastCompleted = completedJobs[completedJobs.length - 1];
         handleCopy(formatTranscript(lastCompleted, outputOptions));
-        appendLog(`Auto-copied "${lastCompleted.fileName}" transcript.`, "info");
       }
     }
     prevCompletedRef.current = queue.completedCount;
-  }, [queue.completedCount, queue.jobs, autoCopyToClipboard, handleCopy, appendLog, outputOptions]);
+  }, [queue.completedCount, queue.jobs, autoCopyToClipboard, handleCopy, outputOptions]);
 
   // Currently processing file name (for sticky progress)
   const currentProcessingFile = useMemo(() => {
@@ -615,7 +616,7 @@ const App: React.FC = () => {
                 <label>Auto-transcribe new recordings:</label>
                 <Switch checked={autoTranscribe} onChange={(checked: boolean) => {
                   setAutoTranscribe(checked);
-                  localStorage.setItem("autoTranscribe", checked.toString());
+                  writeSetting("autoTranscribe", checked.toString());
                   appendLog(`Auto-transcribe ${checked ? 'enabled' : 'disabled'}.`, "info");
                 }} />
               </div>
@@ -623,7 +624,7 @@ const App: React.FC = () => {
                 <label>Auto-copy one-file transcript:</label>
                 <Switch checked={autoCopyToClipboard} onChange={(checked: boolean) => {
                   setAutoCopyToClipboard(checked);
-                  localStorage.setItem("autoCopyToClipboard", checked.toString());
+                  writeSetting("autoCopyToClipboard", checked.toString());
                   appendLog(`Auto-copy ${checked ? 'enabled' : 'disabled'}.`, "info");
                 }} />
               </div>
@@ -705,7 +706,6 @@ const App: React.FC = () => {
             outputOptions={outputOptions}
             onOutputOptionsChange={handleOutputOptionsChange}
             globalStatus={queue.globalStatus}
-            isTranscriptionReady={ffmpegPool.isReady}
             onStartAll={queue.startAll}
             onPause={queue.pause}
             onResume={queue.resume}
@@ -777,14 +777,7 @@ const App: React.FC = () => {
                 if (logMsg.type === "error") className += " log-line-error";
                 else className += isLast ? " log-line-current" : " log-line-old";
                 return (
-                  <div
-                    key={idx}
-                    className={className}
-                    {...(logMsg.html
-                      ? { dangerouslySetInnerHTML: { __html: logMsg.text } }
-                      : { children: logMsg.text }
-                    )}
-                  />
+                  <div key={idx} className={className}>{logMsg.text}</div>
                 );
               })}
             </div>

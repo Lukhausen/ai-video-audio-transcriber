@@ -30,7 +30,7 @@ const similarityScore = (a: string, b: string): number => {
 const findBestOverlap = (
   prevWords: string[],
   currWords: string[],
-  minOverlap: number = 5,
+  minOverlap: number = 3,
   maxOverlap: number = 20
 ): { overlapCount: number; score: number } => {
   let bestOverlap = 0;
@@ -39,8 +39,10 @@ const findBestOverlap = (
     if (candidate > prevWords.length || candidate > currWords.length) break;
     const prevOverlap = prevWords.slice(-candidate).join(" ");
     const currOverlap = currWords.slice(0, candidate).join(" ");
-    const score = similarityScore(prevOverlap.toLowerCase(), currOverlap.toLowerCase());
-    if (score > bestScore) {
+    const left = prevOverlap.toLowerCase();
+    const right = currOverlap.toLowerCase();
+    const score = candidate < 5 ? Number(left === right) : similarityScore(left, right);
+    if (score > 0 && score >= bestScore) {
       bestScore = score;
       bestOverlap = candidate;
     }
@@ -57,8 +59,8 @@ export const stitchTranscriptions = (
   for (let i = 1; i < transcripts.length; i++) {
     const prevWords = stitched.split(/\s+/);
     const currWords = transcripts[i].split(/\s+/);
-    const prevWindow = prevWords.slice(-10);
-    const { overlapCount, score } = findBestOverlap(prevWindow, currWords, 5, 20);
+    const prevWindow = prevWords.slice(-20);
+    const { overlapCount, score } = findBestOverlap(prevWindow, currWords);
     onLog?.(
       `Between segment ${i} and ${i + 1}: best overlap = ${overlapCount}, score = ${score.toFixed(2)}`,
       "info"
