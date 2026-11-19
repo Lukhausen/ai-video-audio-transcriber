@@ -14,6 +14,7 @@ import "react-toastify/dist/ReactToastify.css";
 
 // Hooks & Components
 import { useFFmpegPool } from "./hooks/useFFmpegPool";
+import { useProviderAvailability } from "./hooks/useProviderAvailability";
 import { useTranscriptionQueue } from "./hooks/useTranscriptionQueue";
 import StickyProgress from "./components/StickyProgress";
 import FileJobTable from "./components/FileJobTable";
@@ -24,6 +25,7 @@ import { formatTranscript } from "./transcripts/output";
 import RecentTranscriptRow from "./components/RecentTranscriptRow";
 import { MEDIA_ACCEPT } from "./media/prepareAudio";
 import { readSetting, removeSetting, writeSetting } from "./utils/browserStorage";
+import { availabilityMessage, PROVIDER_NAMES } from "./providers/availability";
 import {
   getStoredModel,
   GOOGLE_AUDIO_MODELS,
@@ -201,9 +203,13 @@ const App: React.FC = () => {
   // FFMPEG POOL + TRANSCRIPTION QUEUE
   // -----------------------------------------------------------------
   const ffmpegPool = useFFmpegPool(appendLog);
+  const selectedProviderLabel = PROVIDER_NAMES[selectedApi];
+  const selectedProviderKey = { groq: groqKey, openai: openaiKey, google: googleKey }[selectedApi].trim();
+  const provider = useProviderAvailability(selectedApi, selectedProviderKey);
   const queue = useTranscriptionQueue({
     ffmpegPool,
     apiConfigRef: apiConfigRef as React.RefObject<ApiConfig>,
+    ensureProviderAvailable: provider.ensureAvailable,
     onLog: appendLog,
   });
 
@@ -477,9 +483,6 @@ const App: React.FC = () => {
       .map(j => j.fileName)
   ), [queue.jobs]);
 
-  const selectedProviderLabel = { groq: "Groq", openai: "OpenAI", google: "Google" }[selectedApi];
-  const selectedProviderKey = { groq: groqKey, openai: openaiKey, google: googleKey }[selectedApi];
-
   const renderSelectedProviderKeyInput = () => {
     if (selectedApi === "google") {
       return renderApiKeyInput("Google", googleKey, handleGoogleKeyChange, handleGoogleKeyBlur,
@@ -599,11 +602,12 @@ const App: React.FC = () => {
               </div>
             </div>
           ) : (
-            <p className="api-key-message setup-field-message">
-              {showAdvanced
-                ? `${selectedProviderLabel} API key saved.`
-                : `${selectedProviderLabel} API key saved. Change it in advanced settings.`}
-            </p>
+            <div className="api-key-message setup-field-message provider-availability" data-status={provider.status}>
+              <span role="status">{availabilityMessage(selectedApi, provider.status)}</span>
+              {provider.status !== "checking" && provider.status !== "reachable" && (
+                <button className="settings-toggle" type="button" onClick={provider.retry}>Retry connection</button>
+              )}
+            </div>
           )}
         </div>
 

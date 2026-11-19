@@ -286,6 +286,26 @@ body,
   margin-left: calc(var(--setup-label-width) + 1rem);
 }
 
+.provider-availability {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.7rem;
+  min-height: 1.6rem;
+}
+
+.provider-availability[data-status="reachable"] {
+  color: var(--color-accent);
+}
+
+.provider-availability:is([data-status="invalid-key"], [data-status="provider-error"], [data-status="network-error"], [data-status="timed-out"]) {
+  color: var(--color-error);
+}
+
+.provider-availability .settings-toggle {
+  padding: 0.25rem 0;
+}
+
 .add-media-panel {
   margin-bottom: 1.5rem;
 }

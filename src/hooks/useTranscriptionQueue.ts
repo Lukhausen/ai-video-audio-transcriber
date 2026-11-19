@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import Groq from 'groq-sdk';
 import OpenAI from 'openai';
 import { transcribeGoogleAudio } from '../providers/google';
-import type { FileJob, ApiConfig, AudioChunk, TranscriptionResult } from '../types';
+import type { FileJob, ApiConfig, ApiProvider, AudioChunk, TranscriptionResult } from '../types';
 import { AUDIO_WORKERS, type FFmpegPoolHandle } from './useFFmpegPool';
 import { convertAudio, isSupportedMedia, MAX_INPUT_BYTES, splitAudio } from '../media/prepareAudio';
 import { RateLimiter } from '../utils/rateLimiter';
@@ -27,16 +27,19 @@ interface QueueFile {
 interface QueueConfig {
   ffmpegPool: FFmpegPoolHandle;
   apiConfigRef: React.RefObject<ApiConfig>;
+  ensureProviderAvailable: (provider: ApiProvider, key: string) => Promise<void>;
   onLog: Log;
 }
 
-function describeError(error: unknown): string {
+function describeError(error: unknown, provider: string): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/api_key_invalid|api key not valid|invalid api key|\b401\b|unauthorized/i.test(message)) {
     return 'The provider rejected the API key. Check Advanced settings and retry.';
   }
   if (/\b429\b|rate limit/i.test(message)) return 'The provider is rate limiting requests. Wait a moment and retry.';
-  if (/network|failed to fetch/i.test(message)) return 'Could not reach the provider. Check your connection and retry.';
+  if (/network|failed to fetch|connection error|load failed/i.test(message)) {
+    return 'The connection to ' + provider + ' failed during transcription. Check your connection and retry.';
+  }
   return message;
 }
 
@@ -48,15 +51,15 @@ async function transcribeSegment(
   try {
     let result: TranscriptionResult;
     if (config.selectedApi === 'groq') {
-      const client = new Groq({ apiKey: config.groqKey, dangerouslyAllowBrowser: true });
+      const client = new Groq({ apiKey: config.groqKey.trim(), dangerouslyAllowBrowser: true });
       const response = await client.audio.transcriptions.create({
         file: audio, model: config.groqModel, response_format: 'verbose_json', timestamp_granularities: ['word', 'segment'],
       });
       result = parseAudioTranscription(response);
     } else if (config.selectedApi === 'google') {
-      result = await transcribeGoogleAudio(config.googleKey, config.googleModel, audio, message => onLog(message, 'error'));
+      result = await transcribeGoogleAudio(config.googleKey.trim(), config.googleModel, audio, message => onLog(message, 'error'));
     } else {
-      const client = new OpenAI({ apiKey: config.openaiKey, dangerouslyAllowBrowser: true });
+      const client = new OpenAI({ apiKey: config.openaiKey.trim(), dangerouslyAllowBrowser: true });
       const response = await client.audio.transcriptions.create({
         file: audio,
         model: config.openaiModel,
@@ -79,7 +82,7 @@ async function transcribeSegment(
   }
 }
 
-export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, onLog }: QueueConfig) {
+export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, ensureProviderAvailable, onLog }: QueueConfig) {
   const [jobs, setJobs] = useState<FileJob[]>([]);
   const jobsRef = useRef<FileJob[]>([]);
   const [globalStatus, setStatus] = useState<QueueStatus>('idle');
@@ -143,7 +146,9 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, o
     };
 
     try {
-      if (!provider.key.trim()) throw new Error('Add your ' + provider.name + ' API key before transcribing.');
+      const key = provider.key.trim();
+      await ensureProviderAvailable(config.selectedApi, key);
+      if (pauseAtCheckpoint()) return;
       if (item.checkpoint?.settings !== settings) {
         item.checkpoint = undefined;
         updateJob(id, { status: 'converting', progress: 10, segmentCount: undefined, segmentsTranscribed: 0 });
@@ -161,6 +166,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, o
       }
 
       const { segments, results } = item.checkpoint;
+      await ensureProviderAvailable(config.selectedApi, key);
       const progress = () => Math.round(45 + 45 * results.length / segments.length);
       updateJob(id, { status: 'transcribing', segmentCount: segments.length, segmentsTranscribed: results.length, progress: progress() });
       const filename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
@@ -184,11 +190,11 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, o
       files.current.delete(id);
       onLog('"' + file.name + '" transcription complete.', 'info');
     } catch (error) {
-      const message = describeError(error);
+      const message = describeError(error, provider.name);
       updateJob(id, { status: 'error', error: message });
       onLog('"' + file.name + '": ' + message, 'error');
     }
-  }, [acquire, apiConfigRef, onLog, updateJob]);
+  }, [acquire, apiConfigRef, ensureProviderAvailable, onLog, updateJob]);
 
   const pump = useCallback(function pumpQueue() {
     if (statusRef.current === 'paused') {
