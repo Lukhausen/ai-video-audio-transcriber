@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { processSavedAudio, type WorkOutcome } from './processAudio';
 
-export type BackgroundRequest = { id: string; key: string; retryInterrupted: boolean };
+export type BackgroundRequest = { id: string; key: string };
 export type BackgroundReply =
   | { type: 'progress'; completed: number; total: number; stage?: string }
   | { type: 'warning'; message: string }
@@ -16,7 +16,7 @@ worker.addEventListener('message', event => {
 
   const respond = (reply: BackgroundReply) => port.postMessage(reply);
   event.waitUntil(processSavedAudio(
-    request.id, request.key, request.retryInterrupted,
+    request.id, request.key,
     (completed, total, stage) => respond({ type: 'progress', completed, total, stage }),
     message => respond({ type: 'warning', message }),
   ).then(

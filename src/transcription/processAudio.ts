@@ -67,20 +67,20 @@ export function assembleTranscript(results: TranscriptionResult[], segments: Aud
 }
 
 export function processSavedAudio(
-  id: string, key: string, retryInterrupted: boolean, report: ReportProgress, onWarning: (message: string) => void,
+  id: string, key: string, report: ReportProgress, onWarning: (message: string) => void,
 ): Promise<WorkOutcome> {
   return navigator.locks.request(workLock(id), async () => {
     const work = await readWork(id);
     if (work?.mode === 'done' && work.transcript) return { state: 'done', transcript: work.transcript };
     if (work?.mode !== 'active') return { state: 'paused' };
 
-    const settings = workSettings(work.config);
-    const audio = await readAudio(id);
-    if (!audio || audio.settings !== settings) throw new Error('The saved audio could not be loaded. Retry this file.');
-    const saved = await readReceipt(id);
-    const receipt = saved?.settings === settings ? saved : { settings, results: [], pending: false };
     try {
-      if (receipt.pending && !retryInterrupted) {
+      const settings = workSettings(work.config);
+      const audio = await readAudio(id);
+      if (!audio || audio.settings !== settings) throw new Error('The saved audio could not be loaded. Retry this file.');
+      const saved = await readReceipt(id);
+      const receipt = saved?.settings === settings ? saved : { settings, results: [], pending: false };
+      if (receipt.pending) {
         throw new Error('The browser interrupted a provider request. Retry this file to submit the unfinished part again.');
       }
       const provider = { provider: work.config.selectedApi, model: work.config.model, key };

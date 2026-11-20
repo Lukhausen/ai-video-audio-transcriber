@@ -6,7 +6,7 @@ import { PROVIDER_NAMES } from '../providers/availability';
 import { prepareBackgroundWorker, runPreparedAudio } from '../transcription/background';
 import { assembleTranscript, transcribePart } from '../transcription/processAudio';
 import {
-  listWork, readWork, readReceipt, saveWork, saveAudio, setWorkMode, removeWork, workLock, workSettings,
+  listWork, readWork, readAudio, readReceipt, saveWork, saveAudio, setWorkMode, removeWork, workLock, workSettings,
   type StoredWork, type Transcript, type WorkConfig,
 } from '../transcription/workStorage';
 
@@ -18,7 +18,7 @@ interface QueueFile {
   config?: WorkConfig;
   saved?: Promise<boolean>;
   modeChange?: Promise<unknown>;
-  retryInterrupted?: boolean;
+  reencode?: boolean;
   checkpoint?: { settings: string; segments: AudioChunk[]; results: TranscriptionResult[] };
 }
 
@@ -46,6 +46,17 @@ function getWorkConfig(config: ApiConfig): WorkConfig {
   const model = { google: config.googleModel, groq: config.groqModel, openai: config.openaiModel }[selectedApi];
   return { selectedApi, model, sampleRate, maxFileSizeMB };
 }
+
+function reusableResults(previous: AudioChunk[] | undefined, next: AudioChunk[], results: TranscriptionResult[]) {
+  const firstChanged = results.findIndex((_, index) => {
+    const before = previous?.[index];
+    const after = next[index];
+    return !before || !after || before.offset !== after.offset || before.keepStart !== after.keepStart || before.keepEnd !== after.keepEnd;
+  });
+  return firstChanged === -1 ? results : results.slice(0, firstChanged);
+}
+
+const megabytes = new Intl.NumberFormat(undefined, { style: 'unit', unit: 'megabyte', maximumSignificantDigits: 3 });
 
 export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, ensureProviderAvailable, onLog }: QueueConfig) {
   const [jobs, setJobs] = useState<FileJob[]>([]);
@@ -93,7 +104,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
   }, [changeJobs, onLog]);
 
   const changeSavedMode = useCallback((item: QueueFile, id: string, mode: 'active' | 'paused') => {
-    if (!item.saved) return;
+    if (!item.saved || item.reencode) return;
     item.modeChange = (item.modeChange ?? item.saved).then(async () => {
       if (await item.saved) await setWorkMode(id, mode);
     }).catch(() => onLog('Could not save the queue state for "' + item.file.name + '".', 'error'));
@@ -102,9 +113,10 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
   const stage = useCallback((job: FileJob) => {
     const item = files.current.get(job.id);
     const runtime = apiConfigRef.current;
-    if (!item || !runtime || !navigator.locks) return;
+    if (!item || !runtime) return;
+    if (job.status === 'error') item.reencode = true;
+    if (!navigator.locks) return;
     if (item.saved) {
-      if (job.status === 'error') item.retryInterrupted = true;
       changeSavedMode(item, job.id, statusRef.current === 'paused' ? 'paused' : 'active');
       return;
     }
@@ -148,16 +160,20 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
       onLog('"' + file.name + '" transcription complete.', 'info');
     };
     const prepare = async () => {
-      updateJob(id, { status: 'converting', progress: 10, segmentCount: undefined, segmentsTranscribed: 0 });
+      updateJob(id, { status: 'converting', progress: 10, providerStage: undefined, segmentCount: undefined, segmentsTranscribed: 0 });
       const { instance, release } = await acquire();
       try {
         if (pauseAtCheckpoint()) return;
         const data = await convertAudio(instance, file, id, config.sampleRate,
           track => onLog('"' + file.name + '": using audio track ' + track + ' because earlier tracks were silent.', 'info'));
         updateJob(id, { status: 'splitting', progress: 35 });
-        return await splitAudio(instance, data, id, {
+        const segments = await splitAudio(instance, data, id, {
           ...runtime, ...config, openaiModel: config.selectedApi === 'openai' ? config.model : runtime.openaiModel,
         });
+        const bytes = segments.reduce((total, part) => total + part.data.byteLength, 0);
+        onLog('"' + file.name + '": FFmpeg prepared ' + megabytes.format(bytes / 1_000_000) +
+          ' of MP3 from ' + megabytes.format(file.size / 1_000_000) + ' of input.', 'info');
+        return segments;
       } finally {
         release();
       }
@@ -175,34 +191,52 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
           complete(stored.transcript);
           return;
         }
-        const receipt = await readReceipt(id);
+        let receipt = await readReceipt(id);
         const finished = stored?.segmentCount && receipt?.settings === settings && receipt.results.length === stored.segmentCount;
-        if (!finished) await ensureProviderAvailable(config.selectedApi, key);
+        if (item.reencode || !finished) await ensureProviderAvailable(config.selectedApi, key);
         if (pauseAtCheckpoint()) return;
 
-        const segmentCount = stored?.segmentCount ?? await navigator.locks.request('transcriber-prepare:' + id, async () => {
+        const segmentCount = (!item.reencode && stored?.segmentCount) || await navigator.locks.request(workLock(id), async () => {
           const existing = await readWork(id);
-          if (existing?.segmentCount) return existing.segmentCount;
+          if (existing?.mode === 'done' || (!item.reencode && existing?.segmentCount)) return existing.segmentCount;
+          // Leave the previous attempt inactive until the replacement audio and receipt are saved.
+          if (item.reencode) await setWorkMode(id, 'failed');
           const segments = await prepare();
           if (!segments) return;
+          if (item.reencode) {
+            const saved = await readReceipt(id);
+            const previous = saved?.results.length ? await readAudio(id) : undefined;
+            const results = saved?.settings === settings
+              ? reusableResults(previous?.settings === settings ? previous.segments : undefined, segments, saved.results)
+              : [];
+            receipt = { settings, results, pending: false };
+          }
           try {
-            await saveAudio(id, settings, segments);
+            await saveAudio(id, settings, segments, item.reencode ? receipt : undefined);
           } catch {
             await removeWork(id);
             item.saved = Promise.resolve(false);
-            item.checkpoint = { settings, segments, results: [] };
+            item.checkpoint = { settings, segments, results: item.reencode ? receipt?.results ?? [] : [] };
             durable = false;
             onLog('Browser storage ran out of space. Keep this tab open while "' + file.name + '" transcribes.', 'info');
+          }
+          if (item.reencode) {
+            item.reencode = false;
+            if (durable) {
+              changeSavedMode(item, id, statusRef.current === 'paused' ? 'paused' : 'active');
+              await item.modeChange;
+            }
           }
           return segments.length;
         });
         if (!segmentCount || pauseAtCheckpoint()) return;
         if (durable) {
-          if (!finished) await ensureProviderAvailable(config.selectedApi, key);
+          if (receipt?.settings !== settings || receipt.results.length !== segmentCount) {
+            await ensureProviderAvailable(config.selectedApi, key);
+          }
           report(receipt?.results.length ?? 0, segmentCount);
           dispatched = true;
-          const outcome = await runPreparedAudio({ id, key, retryInterrupted: !!item.retryInterrupted }, report, onWarning);
-          item.retryInterrupted = false;
+          const outcome = await runPreparedAudio({ id, key }, report, onWarning);
           if (outcome.state === 'done') complete(outcome.transcript);
           else {
             await item.modeChange;
@@ -221,10 +255,12 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
 
       await ensureProviderAvailable(config.selectedApi, key);
       if (pauseAtCheckpoint()) return;
-      if (item.checkpoint?.settings !== settings) {
+      if (item.reencode || item.checkpoint?.settings !== settings) {
+        const previous = item.checkpoint?.settings === settings ? item.checkpoint : undefined;
         const segments = await prepare();
         if (!segments) return;
-        item.checkpoint = { settings, segments, results: [] };
+        item.checkpoint = { settings, segments, results: reusableResults(previous?.segments, segments, previous?.results ?? []) };
+        item.reencode = false;
       }
       const { segments, results } = item.checkpoint;
       await ensureProviderAvailable(config.selectedApi, key);
@@ -246,7 +282,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
       updateJob(id, { status: 'error', error: message });
       onLog('"' + file.name + '": ' + message, 'error');
     }
-  }, [acquire, apiConfigRef, ensureProviderAvailable, onLog, updateJob]);
+  }, [acquire, apiConfigRef, changeSavedMode, ensureProviderAvailable, onLog, updateJob]);
 
   const pump = useCallback(function pumpQueue() {
     if (statusRef.current === 'paused') {

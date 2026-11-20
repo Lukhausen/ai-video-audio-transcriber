@@ -25,7 +25,7 @@ interface FileJobRowProps {
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   ready: { label: 'Ready', color: '#9a9a9a' },
   queued: { label: 'Waiting', color: '#888' },
-  converting: { label: 'Preparing audio', color: '#bbb' },
+  converting: { label: 'Encoding audio', color: '#bbb' },
   splitting: { label: 'Creating chunks', color: '#bbb' },
   transcribing: { label: 'Transcribing', color: '#ccc' },
   stitching: { label: 'Finishing transcript', color: '#ccc' },
@@ -45,6 +45,8 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
   const [expanded, setExpanded] = useState(false);
   const transcript = formatTranscript(job, outputOptions);
   const statusCfg = STATUS_CONFIG[job.status] || STATUS_CONFIG.queued;
+  const mobileStage = job.status === 'transcribing' ? job.providerStage
+    : job.status === 'converting' || job.status === 'splitting' ? statusCfg.label : undefined;
   const isActive = ['converting', 'splitting', 'transcribing', 'stitching'].includes(job.status);
   const canRemove = job.status === 'ready' || job.status === 'queued' || job.status === 'done' || job.status === 'error';
   const isVideo = job.mimeType.startsWith('video/');
@@ -101,8 +103,8 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
                 {job.segmentsTranscribed || 0}/{job.segmentCount}
               </span>
             )}
-            {job.status === 'transcribing' && job.providerStage && (
-              <span className="job-row-mobile-stage" role="status">{job.providerStage}</span>
+            {mobileStage && (
+              <span className="job-row-mobile-stage" role="status">{mobileStage}</span>
             )}
           </div>
         )}

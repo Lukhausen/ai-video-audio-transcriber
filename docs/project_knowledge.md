@@ -15,3 +15,4 @@
 - Keep recovered audio until valid replacement audio is saved, retain completed chunks across pause and retry, and export every completed transcript even when source basenames collide. Report missing or damaged audio explicitly and keep completed results visible when another file fails.
 - Check the selected provider directly when the page opens or reopens and before sending audio. Use free read-only metadata requests and show connection failures beside the provider controls.
 - Background transcription stays browser-only. Save started jobs and completed parts locally, process prepared audio in a service worker where available, and require an explicit retry when an interrupted provider request has an unknown outcome.
+- On the first attempt and on every explicit file Retry, run FFmpeg on the original to create compressed MP3 for upload. Retain completed parts whose chunk boundaries still match and reuse saved audio when resuming from a pause.

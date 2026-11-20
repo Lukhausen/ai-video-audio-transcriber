@@ -67,8 +67,8 @@ export const readReceipt = (id: string) => read<WorkReceipt>(RECEIPTS, id);
 export const saveReceipt = (id: string, receipt: WorkReceipt) => write(RECEIPTS, id, receipt);
 export const workLock = (id: string) => 'transcriber-job:' + id;
 
-export function saveAudio(id: string, settings: string, segments: AudioChunk[]) {
-  return transaction([JOBS, AUDIO], 'readwrite', tx => {
+export function saveAudio(id: string, settings: string, segments: AudioChunk[], retryReceipt?: WorkReceipt) {
+  return transaction([JOBS, AUDIO, RECEIPTS], 'readwrite', tx => {
     const jobs = tx.objectStore(JOBS);
     const request = jobs.get(id);
     request.onsuccess = () => {
@@ -76,6 +76,7 @@ export function saveAudio(id: string, settings: string, segments: AudioChunk[]) 
       if (!work || work.mode === 'done') return;
       jobs.put({ ...work, segmentCount: segments.length }, id);
       tx.objectStore(AUDIO).put({ settings, segments }, id);
+      if (retryReceipt) tx.objectStore(RECEIPTS).put(retryReceipt, id);
     };
   });
 }

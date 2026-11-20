@@ -35,7 +35,7 @@ export function prepareBackgroundWorker(): Promise<ServiceWorker | undefined> {
 export async function runPreparedAudio(
   request: BackgroundRequest, report: ReportProgress, onWarning: (message: string) => void,
 ): Promise<WorkOutcome> {
-  if (!request.key) return processSavedAudio(request.id, request.key, request.retryInterrupted, report, onWarning);
+  if (!request.key) return processSavedAudio(request.id, request.key, report, onWarning);
   // A slow first installation must not block the foreground fallback indefinitely.
   let deadline: number | undefined;
   const worker = await Promise.race([
@@ -43,7 +43,7 @@ export async function runPreparedAudio(
     new Promise<undefined>(resolve => { deadline = window.setTimeout(() => resolve(undefined), 4_000); }),
   ]);
   window.clearTimeout(deadline);
-  if (worker?.state !== 'activated') return processSavedAudio(request.id, request.key, request.retryInterrupted, report, onWarning);
+  if (worker?.state !== 'activated') return processSavedAudio(request.id, request.key, report, onWarning);
 
   return new Promise((resolve, reject) => {
     const { port1, port2 } = new MessageChannel();
@@ -88,7 +88,7 @@ export async function runPreparedAudio(
           reject(new Error('The background job stopped. Retry the unfinished part.'));
         } else {
           // Reacquire the job lock and let the durable request marker decide whether it is safe to continue.
-          void processSavedAudio(request.id, request.key, false, report, onWarning).then(resolve, reject);
+          void processSavedAudio(request.id, request.key, report, onWarning).then(resolve, reject);
         }
       } catch { /* The message port and inactivity timeout still handle this job. */ }
       finally { checking = false; }
@@ -112,7 +112,7 @@ export async function runPreparedAudio(
     } catch {
       close();
       port2.close();
-      void processSavedAudio(request.id, request.key, request.retryInterrupted, report, onWarning).then(resolve, reject);
+      void processSavedAudio(request.id, request.key, report, onWarning).then(resolve, reject);
     }
   });
 }
