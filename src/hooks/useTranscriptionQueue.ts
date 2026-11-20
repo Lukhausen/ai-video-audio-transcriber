@@ -15,6 +15,7 @@ type Log = (message: string, type: 'info' | 'error') => void;
 
 interface QueueFile {
   file: File;
+  startedHere?: boolean;
   config?: WorkConfig;
   saved?: Promise<boolean>;
   modeChange?: Promise<unknown>;
@@ -27,6 +28,7 @@ interface QueueConfig {
   apiConfigRef: React.RefObject<ApiConfig>;
   ensureProviderAvailable: (provider: ApiProvider, key: string) => Promise<void>;
   onLog: Log;
+  onUserJobComplete: (transcript: Transcript, queueSize: number) => void;
 }
 
 function describeError(error: unknown, provider: string): string {
@@ -58,13 +60,19 @@ function reusableResults(previous: AudioChunk[] | undefined, next: AudioChunk[],
 
 const megabytes = new Intl.NumberFormat(undefined, { style: 'unit', unit: 'megabyte', maximumSignificantDigits: 3 });
 
-export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, ensureProviderAvailable, onLog }: QueueConfig) {
+export function useTranscriptionQueue({
+  ffmpegPool: { acquire }, apiConfigRef, ensureProviderAvailable, onLog, onUserJobComplete,
+}: QueueConfig) {
   const [jobs, setJobs] = useState<FileJob[]>([]);
   const jobsRef = useRef<FileJob[]>([]);
   const [globalStatus, setStatus] = useState<QueueStatus>('idle');
   const statusRef = useRef<QueueStatus>('idle');
   const files = useRef(new Map<string, QueueFile>());
   const active = useRef(new Set<string>());
+  const onUserJobCompleteRef = useRef(onUserJobComplete);
+  useEffect(() => {
+    onUserJobCompleteRef.current = onUserJobComplete;
+  }, [onUserJobComplete]);
 
   const changeJobs = useCallback((update: (previous: FileJob[]) => FileJob[]) => {
     jobsRef.current = update(jobsRef.current);
@@ -114,6 +122,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
     const item = files.current.get(job.id);
     const runtime = apiConfigRef.current;
     if (!item || !runtime) return;
+    item.startedHere = true;
     if (job.status === 'error') item.reencode = true;
     if (!navigator.locks) return;
     if (item.saved) {
@@ -158,6 +167,7 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
       updateJob(id, { status: 'done', progress: 100, ...transcript });
       files.current.delete(id);
       onLog('"' + file.name + '" transcription complete.', 'info');
+      if (item.startedHere) onUserJobCompleteRef.current(transcript, jobsRef.current.length);
     };
     const prepare = async () => {
       updateJob(id, { status: 'converting', progress: 10, providerStage: undefined, segmentCount: undefined, segmentsTranscribed: 0 });

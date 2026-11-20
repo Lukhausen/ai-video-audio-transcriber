@@ -16,3 +16,4 @@
 - Check the selected provider directly when the page opens or reopens and before sending audio. Use free read-only metadata requests and show connection failures beside the provider controls.
 - Background transcription stays browser-only. Save started jobs and completed parts locally, process prepared audio in a service worker where available, and require an explicit retry when an interrupted provider request has an unknown outcome.
 - On the first attempt and on every explicit file Retry, run FFmpeg on the original to create compressed MP3 for upload. Retain completed parts whose chunk boundaries still match and reuse saved audio when resuming from a pause.
+- Opening or reloading the page must never trigger a clipboard write from a restored transcript or automatically resumed job. Auto-copy applies only to eligible transcriptions started on the current page.

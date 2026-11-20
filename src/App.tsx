@@ -24,6 +24,7 @@ import TranscriptOutputOptions from "./components/TranscriptOutputOptions";
 import { formatTranscript } from "./transcripts/output";
 import RecentTranscriptRow from "./components/RecentTranscriptRow";
 import { MEDIA_ACCEPT } from "./media/prepareAudio";
+import type { Transcript } from "./transcription/workStorage";
 import { readSetting, removeSetting, writeSetting } from "./utils/browserStorage";
 import { availabilityMessage, PROVIDER_NAMES } from "./providers/availability";
 import {
@@ -193,6 +194,21 @@ const App: React.FC = () => {
     setLogMessages(prev => [...prev.slice(-499), { text: `[${timeStamp}] ${msg}`, type }]);
   }, []);
 
+  const handleCopy = useCallback(async (text: string) => {
+    if (!text) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable.");
+      await navigator.clipboard.writeText(text.trim());
+      toast.success("Copied to clipboard.", { autoClose: 3000 });
+    } catch {
+      appendLog("Could not access the clipboard. You can select the transcript or use Download.", "error");
+    }
+  }, [appendLog]);
+
+  const copyOnCompletion = useCallback((transcript: Transcript, queueSize: number) => {
+    if (autoCopyToClipboard && queueSize === 1) void handleCopy(formatTranscript(transcript, outputOptions));
+  }, [autoCopyToClipboard, handleCopy, outputOptions]);
+
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
@@ -211,6 +227,7 @@ const App: React.FC = () => {
     apiConfigRef: apiConfigRef as React.RefObject<ApiConfig>,
     ensureProviderAvailable: provider.ensureAvailable,
     onLog: appendLog,
+    onUserJobComplete: copyOnCompletion,
   });
 
   // -----------------------------------------------------------------
@@ -370,19 +387,8 @@ const App: React.FC = () => {
   );
 
   // -----------------------------------------------------------------
-  // COPY / DOWNLOAD UTILITIES
+  // DOWNLOAD
   // -----------------------------------------------------------------
-  const handleCopy = useCallback(async (text: string) => {
-    if (!text) return;
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable.");
-      await navigator.clipboard.writeText(text.trim());
-      toast.success("Copied to clipboard.", { autoClose: 3000 });
-    } catch {
-      appendLog("Could not access the clipboard. You can select the transcript or use Download.", "error");
-    }
-  }, [appendLog]);
-
   const handleDownload = useCallback((text: string, fileName: string) => {
     if (!text) return;
     const blob = new Blob([text.trim()], { type: "text/plain" });
@@ -450,24 +456,6 @@ const App: React.FC = () => {
       addedAt: item.cachedAt,
     }))
   ), [recentTranscriptions]);
-
-  // -----------------------------------------------------------------
-  // AUTO-COPY on completion
-  // -----------------------------------------------------------------
-  const prevCompletedRef = useRef(0);
-  useEffect(() => {
-    const isSingleFileQueue = queue.jobs.length === 1;
-
-    if (autoCopyToClipboard && isSingleFileQueue && queue.completedCount > prevCompletedRef.current) {
-      // Find the newly completed job(s)
-      const completedJobs = queue.jobs.filter(j => j.status === 'done' && j.transcript);
-      if (completedJobs.length > 0) {
-        const lastCompleted = completedJobs[completedJobs.length - 1];
-        handleCopy(formatTranscript(lastCompleted, outputOptions));
-      }
-    }
-    prevCompletedRef.current = queue.completedCount;
-  }, [queue.completedCount, queue.jobs, autoCopyToClipboard, handleCopy, outputOptions]);
 
   // Currently processing file name (for sticky progress)
   const currentProcessingFile = useMemo(() => {
