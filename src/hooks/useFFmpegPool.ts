@@ -54,7 +54,10 @@ export function useFFmpegPool(onLog: (message: string, type: 'info' | 'error') =
 
     const instance = new FFmpeg();
     slot.instance = instance;
-    instance.on('log', ({ message }) => onLog('FFmpeg[' + slot.index + ']: ' + message, 'info'));
+    instance.on('log', ({ message }) => {
+      // The WASM wrapper emits this line during ordinary command exit.
+      if (message.trim() !== 'Aborted()') onLog('FFmpeg[' + slot.index + ']: ' + message, 'info');
+    });
     const timeout = window.setTimeout(() => instance.terminate(), LOAD_TIMEOUT_MS);
     try {
       await instance.load({

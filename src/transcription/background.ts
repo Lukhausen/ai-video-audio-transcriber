@@ -1,6 +1,6 @@
 import workerURL from './background.worker?worker&url';
 import { processSavedAudio, type ReportProgress, type WorkOutcome } from './processAudio';
-import { readWork } from './workStorage';
+import { readWork, workLock } from './workStorage';
 import type { BackgroundReply, BackgroundRequest } from './background.worker';
 
 let registration: Promise<ServiceWorker | undefined> | undefined;
@@ -47,26 +47,61 @@ export async function runPreparedAudio(
 
   return new Promise((resolve, reject) => {
     const { port1, port2 } = new MessageChannel();
-    const recoverCompletion = async () => {
-      if (document.visibilityState !== 'visible') return;
-      const work = await readWork(request.id).catch(() => undefined);
-      if (work?.mode === 'done' && work.transcript) {
-        close();
-        resolve({ state: 'done', transcript: work.transcript });
-      }
-    };
-    const timeout = window.setTimeout(() => {
-      close();
-      reject(new Error('The background worker stopped responding. Retry this file to recover its saved progress.'));
-    }, 330_000);
+    const started = Date.now();
+    let heardFromWorker = false;
+    let closed = false;
+    let checking = false;
+    let missingChecks = 0;
+    let timeout: number;
     const close = () => {
+      closed = true;
       window.clearTimeout(timeout);
-      document.removeEventListener('visibilitychange', recoverCompletion);
+      window.clearInterval(periodicCheck);
+      document.removeEventListener('visibilitychange', checkWorker);
       port1.close();
     };
-    document.addEventListener('visibilitychange', recoverCompletion);
+    const resetTimeout = () => {
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => {
+        close();
+        reject(new Error('The background worker stopped responding. Retry this file to recover its saved progress.'));
+      }, 330_000);
+    };
+    const checkWorker = async () => {
+      if (closed || checking || document.visibilityState !== 'visible') return;
+      checking = true;
+      try {
+        const work = await readWork(request.id);
+        if (closed) return;
+        if (work?.mode === 'done' && work.transcript) {
+          close();
+          resolve({ state: 'done', transcript: work.transcript });
+          return;
+        }
+        if (!heardFromWorker && Date.now() - started < 8_000) return;
+        const { held, pending } = await navigator.locks.query();
+        const busy = [...(held ?? []), ...(pending ?? [])].some(lock => lock.name === workLock(request.id));
+        missingChecks = busy ? 0 : missingChecks + 1;
+        if (closed || missingChecks < 2) return;
+        close();
+        if (work?.mode === 'failed') {
+          reject(new Error('The background job stopped. Retry the unfinished part.'));
+        } else {
+          // Reacquire the job lock and let the durable request marker decide whether it is safe to continue.
+          void processSavedAudio(request.id, request.key, false, report, onWarning).then(resolve, reject);
+        }
+      } catch { /* The message port and inactivity timeout still handle this job. */ }
+      finally { checking = false; }
+    };
+    const periodicCheck = window.setInterval(checkWorker, 2_000);
+    document.addEventListener('visibilitychange', checkWorker);
+    resetTimeout();
     port1.onmessage = ({ data }: MessageEvent<BackgroundReply>) => {
-      if (data.type === 'progress') return report(data.completed, data.total);
+      if (data.type === 'progress') {
+        heardFromWorker = true;
+        resetTimeout();
+        return report(data.completed, data.total, data.stage);
+      }
       if (data.type === 'warning') return onWarning(data.message);
       close();
       if (data.type === 'result') resolve(data.result);

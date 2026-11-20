@@ -28,6 +28,21 @@ async function removeTempFile(encoder: FFmpeg, path: string) {
   try { await encoder.deleteFile(path); } catch { /* No output was created. */ }
 }
 
+async function audioDuration(encoder: FFmpeg, filename: string, output: string): Promise<number> {
+  try {
+    const status = await encoder.ffprobe(['-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1', '-o', output, filename]);
+    // This WASM build leaves the -1 return sentinel on successful probes.
+    if (status === 0 || status === -1) {
+      const duration = Number(await encoder.readFile(output, 'utf8').catch(() => ''));
+      if (Number.isFinite(duration) && duration > 0) return duration;
+    }
+    throw new Error('Could not determine audio duration for safe splitting.');
+  } finally {
+    await removeTempFile(encoder, output);
+  }
+}
+
 export async function convertAudio(
   encoder: FFmpeg, file: File, id: string, sampleRate: number, onTrackChange: (track: number) => void,
 ): Promise<Uint8Array> {
@@ -83,10 +98,7 @@ export async function splitAudio(encoder: FFmpeg, data: Uint8Array, id: string, 
       const bytes = await encoder.readFile(filename) as Uint8Array;
       if (bytes.byteLength <= maxBytes && maxDuration === Infinity) return [{ data: bytes, offset, keepStart, keepEnd }];
 
-      const { log } = await runFFmpeg(encoder, ['-i', filename, '-t', '0', '-f', 'null', '-']);
-      const match = log.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-      if (!match) throw new Error('Could not determine audio duration for safe splitting.');
-      const duration = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+      const duration = await audioDuration(encoder, filename, 'duration_' + id + '.txt');
       if (bytes.byteLength <= maxBytes && duration <= maxDuration) return [{ data: bytes, offset, keepStart, keepEnd }];
       if (duration <= Math.max(0.2, overlap * 2 + 0.1)) throw new Error('Audio cannot fit the selected chunk size. Increase it in Advanced settings.');
 

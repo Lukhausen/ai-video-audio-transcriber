@@ -12,11 +12,12 @@ import {
 } from './workStorage';
 
 export type WorkOutcome = { state: 'done'; transcript: Transcript } | { state: 'paused' };
-export type ReportProgress = (done: number, total: number) => void;
+export type ReportProgress = (done: number, total: number, stage?: string) => void;
 const limiter = new RateLimiter(10);
 
 export async function transcribePart(
   data: Uint8Array, fileName: string, index: number, config: ProviderConfig, onWarning: (message: string) => void,
+  onStage: (message: string) => void,
 ): Promise<TranscriptionResult> {
   const name = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) + '_seg' + index + '.mp3';
   const file = new File([data], name, { type: 'audio/mp3' });
@@ -24,7 +25,7 @@ export async function transcribePart(
   try {
     let result: TranscriptionResult;
     if (config.provider === 'google') {
-      result = await transcribeGoogleAudio(config.key, config.model, file, onWarning);
+      result = await transcribeGoogleAudio(config.key, config.model, file, onWarning, onStage);
     } else if (config.provider === 'groq') {
       const client = new Groq({ apiKey: config.key, dangerouslyAllowBrowser: true });
       result = parseAudioTranscription(await client.audio.transcriptions.create({
@@ -88,7 +89,8 @@ export function processSavedAudio(
       report(results.length, segments.length);
       for (let index = results.length; index < segments.length; index++) {
         if (!await beginPart(id, { settings, results, pending: true })) return { state: 'paused' };
-        results.push(await transcribePart(segments[index].data, work.job.fileName, index, provider, onWarning));
+        results.push(await transcribePart(segments[index].data, work.job.fileName, index, provider, onWarning,
+          stage => report(index, segments.length, stage)));
         await saveReceipt(id, { settings, results, pending: false });
         report(results.length, segments.length);
       }

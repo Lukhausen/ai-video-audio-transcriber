@@ -19,6 +19,7 @@ export interface FileJob {
   progress: number;           // 0–100 within current step
   segmentCount?: number;
   segmentsTranscribed?: number;
+  providerStage?: string;
   transcript?: string;
   transcriptCues?: TranscriptCue[];
   llmResult?: string;

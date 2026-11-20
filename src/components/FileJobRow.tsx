@@ -101,6 +101,9 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
                 {job.segmentsTranscribed || 0}/{job.segmentCount}
               </span>
             )}
+            {job.status === 'transcribing' && job.providerStage && (
+              <span className="job-row-mobile-stage" role="status">{job.providerStage}</span>
+            )}
           </div>
         )}
 
@@ -110,7 +113,7 @@ const FileJobRow: React.FC<FileJobRowProps> = ({
             {isActive && <LoadingOutlined />}
             {job.status === 'done' && <RiCheckboxCircleLine className="status-icon-success" />}
             {job.status === 'error' && <RiCloseCircleLine />}
-            {statusCfg.label}
+            {job.status === 'transcribing' && job.providerStage ? job.providerStage : statusCfg.label}
           </span>
         </div>
 

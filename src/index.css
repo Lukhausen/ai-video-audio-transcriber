@@ -2421,6 +2421,10 @@ select.input-standard {
   color: var(--color-accent);
 }
 
+.job-row-mobile-stage {
+  display: none;
+}
+
 /* Actions */
 .job-row-actions {
   grid-area: actions;
@@ -2522,6 +2526,12 @@ select.input-standard {
 
   .job-row-status {
     display: none;
+  }
+
+  .job-row-mobile-stage {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: 0.78rem;
   }
 
   .job-row-progress-container {

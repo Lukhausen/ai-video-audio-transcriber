@@ -136,8 +136,10 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
       updateJob(id, { status: 'queued' });
       return true;
     };
-    const report = (done: number, total: number) => {
-      updateJob(id, { status: 'transcribing', segmentCount: total, segmentsTranscribed: done, progress: Math.round(45 + 45 * done / total) });
+    const report = (done: number, total: number, stage?: string) => {
+      if (stage) onLog('"' + file.name + '" part ' + (done + 1) + '/' + total + ' · ' + stage, 'info');
+      updateJob(id, { status: 'transcribing', providerStage: stage, segmentCount: total, segmentsTranscribed: done,
+        progress: Math.round(45 + 45 * done / total) });
     };
     const onWarning = (message: string) => onLog(message, 'error');
     const complete = (transcript: Transcript) => {
@@ -229,7 +231,8 @@ export function useTranscriptionQueue({ ffmpegPool: { acquire }, apiConfigRef, e
       report(results.length, segments.length);
       for (let index = results.length; index < segments.length; index++) {
         if (pauseAtCheckpoint()) return;
-        results.push(await transcribePart(segments[index].data, file.name, index, provider, onWarning));
+        results.push(await transcribePart(segments[index].data, file.name, index, provider, onWarning,
+          stage => report(index, segments.length, stage)));
         report(results.length, segments.length);
       }
       complete(assembleTranscript(results, segments));
